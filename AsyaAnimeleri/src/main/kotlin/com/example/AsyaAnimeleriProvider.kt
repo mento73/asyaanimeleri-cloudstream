@@ -160,7 +160,7 @@ class AsyaAnimeleriProvider : MainAPI() {
         }
     }
 
- @OptIn(ExperimentalEncodingApi::class)
+@OptIn(ExperimentalEncodingApi::class)
 override suspend fun loadLinks(
     data: String,
     isCasting: Boolean,
@@ -171,7 +171,7 @@ override suspend fun loadLinks(
     val document = app.get(data).document
 
     val options = document.select(
-        "select.mirror option:not(:first-child)"
+        "select option[value]"
     )
 
     var found = false
@@ -201,6 +201,14 @@ override suspend fun loadLinks(
                 .replace(Regex("""^//"""), "https://")
                 .replace("""\/""", "/")
                 .let { fixUrl(it) }
+
+            // OK.ru şu anda siyah ekran verdiği için atlıyoruz.
+            if (
+                cleanUrl.contains("ok.ru", ignoreCase = true) ||
+                cleanUrl.contains("odnoklassniki", ignoreCase = true)
+            ) {
+                return@forEach
+            }
 
             val success = loadExtractor(
                 url = cleanUrl,
