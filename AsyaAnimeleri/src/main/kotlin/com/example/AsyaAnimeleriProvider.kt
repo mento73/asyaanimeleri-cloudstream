@@ -117,6 +117,10 @@ class AsyaAnimeleriProvider : MainAPI() {
             .selectFirst("meta[property='og:image']")
             ?.attr("content")
 
+            val description = document
+    .selectFirst("meta[property='og:description']")
+    ?.attr("content")
+            
         val year = document
     .selectFirst("span.split:nth-child(3)")
     ?.text()
