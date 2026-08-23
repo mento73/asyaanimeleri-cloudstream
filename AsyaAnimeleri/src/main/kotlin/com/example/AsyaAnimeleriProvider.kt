@@ -160,7 +160,8 @@ class AsyaAnimeleriProvider : MainAPI() {
         }
     }
 
-  override suspend fun loadLinks(
+ @OptIn(ExperimentalEncodingApi::class)
+override suspend fun loadLinks(
     data: String,
     isCasting: Boolean,
     subtitleCallback: (SubtitleFile) -> Unit,
@@ -169,29 +170,41 @@ class AsyaAnimeleriProvider : MainAPI() {
 
     val document = app.get(data).document
 
-    val candidateUrls = mutableListOf<String>()
-
-    document.select("iframe").forEach { element ->
-        listOf("src", "data-src", "data-lazy-src").forEach { attr ->
-            val value = element.attr(attr).trim()
-
-            if (value.isNotBlank()) {
-                val absolute = element.absUrl(attr)
-                candidateUrls += if (absolute.isNotBlank()) absolute else value
-            }
-        }
-    }
+    val options = document.select(
+        "select.mirror option:not(:first-child)"
+    )
 
     var found = false
 
-    candidateUrls
-        .distinct()
-        .filterNot { it.contains("asyaanimeleri.pw") }
-        .forEach { url ->
+    options.forEach { option ->
+
+        try {
+            val encodedHtml = option.attr("value")
+
+            if (encodedHtml.isBlank()) {
+                return@forEach
+            }
+
+            val decodedHtml = Base64
+                .decode(encodedHtml)
+                .toString(Charset.defaultCharset())
+
+            val iframeSrc = Regex(
+                """src=["'](.*?)["']"""
+            )
+                .find(decodedHtml)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: return@forEach
+
+            val cleanUrl = iframeSrc
+                .replace(Regex("""^//"""), "https://")
+                .replace("""\/""", "/")
+                .let { fixUrl(it) }
 
             val success = loadExtractor(
-                url = url,
-                referer = data,
+                url = cleanUrl,
+                referer = "$mainUrl/",
                 subtitleCallback = subtitleCallback,
                 callback = callback
             )
@@ -199,8 +212,10 @@ class AsyaAnimeleriProvider : MainAPI() {
             if (success) {
                 found = true
             }
+
+        } catch (_: Exception) {
         }
+    }
 
     return found
-}
 }
