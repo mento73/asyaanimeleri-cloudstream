@@ -20,8 +20,8 @@ class AsyaAnimeleriProvider : MainAPI() {
     override val hasMainPage = true
 
     override val mainPage = mainPageOf(
-        "$mainUrl/series/list-mode/" to "Tüm Animeler"
-    )
+    "$mainUrl/series/" to "Tüm Animeler"
+)
 
     override suspend fun getMainPage(
         page: Int,
@@ -76,7 +76,7 @@ class AsyaAnimeleriProvider : MainAPI() {
         page: Int
     ): SearchResponseList? {
 
-        val document = app.get("$mainUrl/series/list-mode/").document
+        val document = app.get("$mainUrl/series/").document
 
         val results = document
             .select("a[href*='/series/']")
