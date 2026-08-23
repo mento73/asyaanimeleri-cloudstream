@@ -260,6 +260,16 @@ class AsyaAnimeleriProvider : MainAPI() {
                     ?.trim()
                     .orEmpty()
 
+                 val episodePoster = episodeElement
+                    .selectFirst("img")
+                    ?.let { img ->
+                    img.absUrl("src")
+                   .takeIf { it.isNotBlank() }
+                    ?: img.absUrl("data-src")
+                   .takeIf { it.isNotBlank() }
+                   ?: img.absUrl("data-lazy-src")
+                   .takeIf { it.isNotBlank() }
+    }
                 val episodeNumber = numberText
                     ?.let {
                         Regex("""\d+""")
@@ -286,19 +296,20 @@ class AsyaAnimeleriProvider : MainAPI() {
                     )
 
                 newEpisode(episodeUrl) {
-                    episode = episodeNumber
+    episode = episodeNumber
+    posterUrl = episodePoster
 
-                    name = when {
-                        cleanedTitle.isNotBlank() ->
-                            cleanedTitle
+    name = when {
+        cleanedTitle.isNotBlank() ->
+            cleanedTitle
 
-                        episodeNumber != null ->
-                            "Bölüm $episodeNumber"
+        episodeNumber != null ->
+            "Bölüm $episodeNumber"
 
-                        else ->
-                            numberText ?: "Bölüm"
-                    }
-                }
+        else ->
+            numberText ?: "Bölüm"
+    }
+}
             }
             .distinctBy { it.data }
 
