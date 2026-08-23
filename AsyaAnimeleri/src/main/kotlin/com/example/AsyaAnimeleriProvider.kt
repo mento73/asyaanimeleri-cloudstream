@@ -117,9 +117,22 @@ class AsyaAnimeleriProvider : MainAPI() {
             .selectFirst("meta[property='og:image']")
             ?.attr("content")
 
-        val description = document
-            .selectFirst("meta[property='og:description']")
-            ?.attr("content")
+        val year = document
+    .selectFirst("span.split:nth-child(3)")
+    ?.text()
+    ?.trim()
+    ?.toIntOrNull()
+
+val tags = document
+    .select(".spe > span:nth-child(7) a")
+    .map { it.text().trim() }
+    .filter { it.isNotBlank() }
+
+val rating = document
+    .selectFirst("div.rating")
+    ?.text()
+    ?.trim()
+    ?.toRatingInt()
 
         val episodes = document
             .select("a")
@@ -152,18 +165,21 @@ class AsyaAnimeleriProvider : MainAPI() {
             .distinctBy { it.data }
 
         return newAnimeLoadResponse(
-            title,
-            url,
-            TvType.Anime
-        ) {
-            posterUrl = poster
-            plot = description
+    title,
+    url,
+    TvType.Anime
+) {
+    posterUrl = poster
+    plot = description
+    this.year = year
+    this.tags = tags
+    this.rating = rating
 
-            addEpisodes(
-                DubStatus.Subbed,
-                episodes
-            )
-        }
+    addEpisodes(
+        DubStatus.Subbed,
+        episodes
+    )
+}
     }
 
 @OptIn(ExperimentalEncodingApi::class)
