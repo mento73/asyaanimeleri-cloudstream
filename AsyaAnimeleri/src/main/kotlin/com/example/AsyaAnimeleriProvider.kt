@@ -197,15 +197,15 @@ class AsyaAnimeleriProvider : MainAPI() {
                 ?.trim()
 
         val year = document
-            .selectFirst("span.split:nth-child(3)")
-            ?.text()
-            ?.trim()
-            ?.let {
-                Regex("""(19|20)\d{2}""")
-                    .find(it)
-                    ?.value
-                    ?.toIntOrNull()
-            }
+    .select(".spe span")
+    .map { it.text().trim() }
+    .firstOrNull { it.contains("Yayın Yılı:", ignoreCase = true) }
+    ?.let {
+        Regex("""(19|20)\d{2}""")
+            .find(it)
+            ?.value
+            ?.toIntOrNull()
+    }
 
         /*
          * Genre linklerini doğrudan alıyoruz.
