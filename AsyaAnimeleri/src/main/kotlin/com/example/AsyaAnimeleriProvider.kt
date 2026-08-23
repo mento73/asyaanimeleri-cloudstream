@@ -381,7 +381,7 @@ class AsyaAnimeleriProvider : MainAPI() {
 
             this.recommendations = recommendations
 
-            this.episodes = mapOf(
+            this.episodes = mutableMapOf(
     DubStatus.Subbed to episodes
 )
         }
