@@ -44,11 +44,19 @@ class AsyaAnimeleriProvider : MainAPI() {
                 ) {
                     null
                 } else {
-                    newAnimeSearchResponse(
-                        title,
-                        url,
-                        TvType.Anime
-                    )
+                   newAnimeSearchResponse(
+    title,
+    url,
+    TvType.Anime
+) {
+    posterUrl = element
+        .selectFirst("img")
+        ?.let { img ->
+            img.absUrl("src")
+                .ifBlank { img.absUrl("data-src") }
+                .ifBlank { img.absUrl("data-lazy-src") }
+        }
+}
                 }
             }
             .distinctBy { it.url }
