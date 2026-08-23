@@ -31,7 +31,12 @@ jobs:
 
       - name: Build AsyaAnimeleri
         run: gradle AsyaAnimeleri:make
-
+     
+      - name: Show build files
+        run: |
+          echo "=== AsyaAnimeleri build contents ==="
+          find AsyaAnimeleri/build -type f -print || true
+     
       - name: Upload plugin
         uses: actions/upload-artifact@v4
         with:
