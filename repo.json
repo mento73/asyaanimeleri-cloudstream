@@ -1,8 +1,0 @@
-{
-  "name": "AsyaAnimeleri",
-  "description": "AsyaAnimeleri CloudStream eklenti deposu",
-  "manifestVersion": 1,
-  "pluginLists": [
-    "https://raw.githubusercontent.com/mento73/asyaanimeleri-cloudstream/builds/plugins.json"
-  ]
-}

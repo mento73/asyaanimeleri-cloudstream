@@ -1,0 +1,21 @@
+[
+    {
+        "fileHash": "sha256-db8dd0fd250f7527175e7858f4aaee02913de5789512f6c76b5f97f98169f772",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/mento73/asyaanimeleri-cloudstream",
+        "fileSize": 2263,
+        "status": 1,
+        "language": "tr",
+        "authors": [
+            "Damla"
+        ],
+        "tvTypes": [
+            "Anime"
+        ],
+        "version": 1,
+        "internalName": "AsyaAnimeleri",
+        "description": "AsyaAnimeleri CloudStream eklentisi",
+        "url": "https://raw.githubusercontent.com/mento73/asyaanimeleri-cloudstream/builds/AsyaAnimeleri.cs3",
+        "name": "AsyaAnimeleri"
+    }
+]
