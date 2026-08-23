@@ -176,6 +176,37 @@ class AsyaAnimeleriProvider : MainAPI() {
     var found = false
 
     iframeUrls.forEach { iframeUrl ->
+
+        if (iframeUrl.contains("asyaanimeleri.pw")) {
+            return@forEach
+        }
+
+        val success = loadExtractor(
+            url = iframeUrl,
+            referer = data,
+            subtitleCallback = subtitleCallback,
+            callback = callback
+        )
+
+        if (success) {
+            found = true
+        }
+    }
+
+    return found
+}
+
+    val document = app.get(data).document
+
+    val iframeUrls = document
+        .select("iframe[src]")
+        .map { it.absUrl("src") }
+        .filter { it.isNotBlank() }
+        .distinct()
+
+    var found = false
+
+    iframeUrls.forEach { iframeUrl ->
         val success = loadExtractor(
             url = iframeUrl,
             referer = data,
