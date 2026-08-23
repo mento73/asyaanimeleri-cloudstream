@@ -36,7 +36,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AsyaAnimeleri
-          path: AsyaAnimeleri/build/
+          path: AsyaAnimeleri/build/*.cs3
 
       - name: Build AsyaAnimeleri
         run: gradle AsyaAnimeleri:make
