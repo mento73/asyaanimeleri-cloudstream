@@ -123,12 +123,12 @@ class AsyaAnimeleriProvider : MainAPI() {
     ?.trim()
     ?.toIntOrNull()
 
-val tags = document
+        val tags = document
     .select(".spe > span:nth-child(7) a")
     .map { it.text().trim() }
     .filter { it.isNotBlank() }
 
-val rating = document
+       val rating = document
     .selectFirst("div.rating")
     ?.text()
     ?.trim()
