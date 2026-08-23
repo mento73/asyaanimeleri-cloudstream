@@ -381,10 +381,9 @@ class AsyaAnimeleriProvider : MainAPI() {
 
             this.recommendations = recommendations
 
-            addEpisodes(
-                DubStatus.Subbed,
-                episodes
-            )
+            this.episodes = mapOf(
+    DubStatus.Subbed to episodes
+)
         }
     }
 
