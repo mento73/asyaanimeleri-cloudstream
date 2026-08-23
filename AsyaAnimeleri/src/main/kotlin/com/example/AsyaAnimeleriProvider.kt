@@ -136,7 +136,6 @@ class AsyaAnimeleriProvider : MainAPI() {
     .selectFirst("div.rating")
     ?.text()
     ?.trim()
-    ?.toRatingInt()
 
         val episodes = document
             .select("a")
@@ -177,7 +176,6 @@ class AsyaAnimeleriProvider : MainAPI() {
     plot = description
     this.year = year
     this.tags = tags
-    this.rating = rating
 
     addEpisodes(
         DubStatus.Subbed,
