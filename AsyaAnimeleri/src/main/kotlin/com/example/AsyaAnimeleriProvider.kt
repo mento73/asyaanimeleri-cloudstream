@@ -158,7 +158,7 @@ class AsyaAnimeleriProvider : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+  override suspend fun loadLinks(
     data: String,
     isCasting: Boolean,
     subtitleCallback: (SubtitleFile) -> Unit,
@@ -167,57 +167,37 @@ class AsyaAnimeleriProvider : MainAPI() {
 
     val document = app.get(data).document
 
-    val iframeUrls = document
-        .select("iframe[src]")
-        .map { it.absUrl("src") }
-        .filter { it.isNotBlank() }
-        .distinct()
+    val candidateUrls = mutableListOf<String>()
 
-    var found = false
+    document.select("iframe").forEach { element ->
+        listOf("src", "data-src", "data-lazy-src").forEach { attr ->
+            val value = element.attr(attr).trim()
 
-    iframeUrls.forEach { iframeUrl ->
-
-        if (iframeUrl.contains("asyaanimeleri.pw")) {
-            return@forEach
-        }
-
-        val success = loadExtractor(
-            url = iframeUrl,
-            referer = data,
-            subtitleCallback = subtitleCallback,
-            callback = callback
-        )
-
-        if (success) {
-            found = true
+            if (value.isNotBlank()) {
+                val absolute = element.absUrl(attr)
+                candidateUrls += if (absolute.isNotBlank()) absolute else value
+            }
         }
     }
 
-    return found
-}
-
-    val document = app.get(data).document
-
-    val iframeUrls = document
-        .select("iframe[src]")
-        .map { it.absUrl("src") }
-        .filter { it.isNotBlank() }
-        .distinct()
-
     var found = false
 
-    iframeUrls.forEach { iframeUrl ->
-        val success = loadExtractor(
-            url = iframeUrl,
-            referer = data,
-            subtitleCallback = subtitleCallback,
-            callback = callback
-        )
+    candidateUrls
+        .distinct()
+        .filterNot { it.contains("asyaanimeleri.pw") }
+        .forEach { url ->
 
-        if (success) {
-            found = true
+            val success = loadExtractor(
+                url = url,
+                referer = data,
+                subtitleCallback = subtitleCallback,
+                callback = callback
+            )
+
+            if (success) {
+                found = true
+            }
         }
-    }
 
     return found
 }
