@@ -24,52 +24,50 @@ class AsyaAnimeleriProvider : MainAPI() {
 )
 
     override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    page: Int,
+    request: MainPageRequest
+): HomePageResponse {
 
-        val document = app.get(request.data).document
+    val document = app.get(request.data).document
 
-        val animeList = document
-            .select("a[href*='/series/']")
-            .mapNotNull { element ->
+    val animeList = document
+        .select("article.bs")
+        .mapNotNull { element ->
 
-                val title = element.text().trim()
-                val url = element.absUrl("href")
+            val title = element
+                .selectFirst("div.tt.tts")
+                ?.text()
+                ?.trim()
+                ?: return@mapNotNull null
 
-                if (
-                    title.isBlank() ||
-                    url.isBlank() ||
-                    url.contains("list-mode")
-                ) {
-                    null
-                } else {
-                   newAnimeSearchResponse(
-    title,
-    url,
-    TvType.Anime
-) {
-    posterUrl = element
-        .selectFirst("img")
-        ?.let { img ->
-            img.absUrl("src")
-                .ifBlank { img.absUrl("data-src") }
-                .ifBlank { img.absUrl("data-lazy-src") }
-        }
-}
-                }
+            val url = element
+                .selectFirst("a")
+                ?.absUrl("href")
+                ?.trim()
+                ?: return@mapNotNull null
+
+            val poster = element
+                .selectFirst("img")
+                ?.absUrl("src")
+
+            newAnimeSearchResponse(
+                title,
+                url,
+                TvType.Anime
+            ) {
+                posterUrl = poster
             }
-            .distinctBy { it.url }
+        }
 
-        return newHomePageResponse(
-            listOf(
-                HomePageList(
-                    "Tüm Animeler",
-                    animeList
-                )
+    return newHomePageResponse(
+        listOf(
+            HomePageList(
+                "Tüm Animeler",
+                animeList
             )
         )
-    }
+    )
+}
 
     override suspend fun search(
         query: String,
