@@ -1,1 +1,6 @@
-
+{
+  "name": "AsyaAnimeleri",
+  "description": "AsyaAnimeleri için CloudStream eklenti deposu",
+  "manifestVersion": 1,
+  "pluginLists": []
+}
