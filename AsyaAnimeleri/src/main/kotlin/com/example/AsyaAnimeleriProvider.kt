@@ -2,6 +2,7 @@ package com.example
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
 
 class AsyaAnimeleriProvider : MainAPI() {
 
@@ -158,11 +159,35 @@ class AsyaAnimeleriProvider : MainAPI() {
     }
 
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        return false
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
+
+    val document = app.get(data).document
+
+    val iframeUrls = document
+        .select("iframe[src]")
+        .map { it.absUrl("src") }
+        .filter { it.isNotBlank() }
+        .distinct()
+
+    var found = false
+
+    iframeUrls.forEach { iframeUrl ->
+        val success = loadExtractor(
+            url = iframeUrl,
+            referer = data,
+            subtitleCallback = subtitleCallback,
+            callback = callback
+        )
+
+        if (success) {
+            found = true
+        }
     }
+
+    return found
+}
 }
