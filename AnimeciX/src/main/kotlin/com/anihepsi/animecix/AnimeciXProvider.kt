@@ -185,8 +185,6 @@ class AnimeciXProvider : MainAPI() {
             plot = anime.description
             tags = anime.tags.map { it.name }
 
-            rating = anime.rating.toRatingInt()
-
             addActors(
                 anime.actors.map {
                     Actor(
