@@ -7,13 +7,12 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 /*
- * DiziGom provider
+ * DiziGom Provider
  *
  * Original provider lineage:
  * Kekik / Kraptor ecosystem.
  *
- * Modernized for the Anihepsi CloudStream repository
- * using the current DiziGom site structure.
+ * Modernized for the Anihepsi CloudStream repository.
  */
 
 class DiziGomProvider : MainAPI() {
@@ -35,23 +34,27 @@ class DiziGomProvider : MainAPI() {
     )
 
     /*
-     * Current episode URLs look like:
-     *
-     * /ted-lasso-1-sezon-6-bolum/
+     * Örnek:
+     * https://www.dizigom.love/ted-lasso-1-sezon-6-bolum/
      */
     private val episodeRegex = Regex(
         """-(\d+)-sezon-(\d+)-bolum/?(?:\?.*)?$""",
         RegexOption.IGNORE_CASE
     )
 
-    private fun Element.imageUrl(): String? {
+    /*
+     * ---------------------------------------------------------
+     * IMAGE
+     * ---------------------------------------------------------
+     */
 
-        val image =
-            if (tagName() == "img") {
-                this
-            } else {
-                selectFirst("img")
-            } ?: return null
+    private fun Element.getImageUrl(): String? {
+
+        val image = if (tagName() == "img") {
+            this
+        } else {
+            selectFirst("img")
+        } ?: return null
 
         val src =
             image.attr("src")
@@ -69,53 +72,11 @@ class DiziGomProvider : MainAPI() {
         }
     }
 
-    private fun Element.seriesTitle(): String? {
-
-        return selectFirst("img")
-            ?.attr("alt")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-
-            ?: attr("title")
-                .trim()
-                .takeIf { it.isNotBlank() }
-
-            ?: selectFirst(
-                ".title, .name, h2, h3, h4"
-            )
-                ?.text()
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-
-            ?: text()
-                .trim()
-                .takeIf { it.isNotBlank() }
-    }
-
-    private fun Element.toSeriesSearchResponse(): SearchResponse? {
-
-        val href = attr("href")
-            .trim()
-            .takeIf {
-                it.contains("/diziler/")
-            }
-            ?.let {
-                fixUrlNull(it)
-            }
-            ?: return null
-
-        val title =
-            seriesTitle()
-                ?: return null
-
-        return newTvSeriesSearchResponse(
-            title,
-            href,
-            TvType.TvSeries
-        ) {
-            posterUrl = imageUrl()
-        }
-    }
+    /*
+     * ---------------------------------------------------------
+     * MAIN PAGE
+     * ---------------------------------------------------------
+     */
 
     override suspend fun getMainPage(
         page: Int,
@@ -127,15 +88,14 @@ class DiziGomProvider : MainAPI() {
             referer = "$mainUrl/"
         ).document
 
-        val results =
-            if (request.name == "Son Eklenen Bölümler") {
+        val results = when (request.name) {
 
+            "Son Eklenen Bölümler" ->
                 parseLatestEpisodes(document)
 
-            } else {
-
+            else ->
                 parseLatestSeries(document)
-            }
+        }
 
         return newHomePageResponse(
             request.name,
@@ -145,25 +105,63 @@ class DiziGomProvider : MainAPI() {
     }
 
     /*
-     * Important:
+     * Gerçek ana sayfa yapısı:
      *
-     * The site header contains a huge alphabetical list of
-     * /diziler/ links without posters.
-     *
-     * Therefore we only accept series links that actually
-     * contain an image.
+     * <a href=".../diziler/ted-lasso/">
+     *     <img
+     *         src=".../Ted-Lasso.webp"
+     *         title="Ted Lasso"
+     *     >
+     * </a>
      */
     private fun parseLatestSeries(
         document: Document
     ): List<SearchResponse> {
 
         return document
-            .select(
-                "a[href*='/diziler/']:has(img)"
-            )
-            .mapNotNull { element ->
+            .select("a[href*='/diziler/'] > img[src]")
+            .mapNotNull { image ->
 
-                element.toSeriesSearchResponse()
+                val link = image.parent()
+                    ?: return@mapNotNull null
+
+                val href = link
+                    .attr("href")
+                    .trim()
+                    .takeIf {
+                        it.contains("/diziler/")
+                    }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
+                    ?: return@mapNotNull null
+
+                val title =
+                    image.attr("title")
+                        .trim()
+                        .takeIf { it.isNotBlank() }
+
+                        ?: image.attr("alt")
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+
+                        ?: return@mapNotNull null
+
+                val poster = image
+                    .attr("src")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
+
+                newTvSeriesSearchResponse(
+                    title,
+                    href,
+                    TvType.TvSeries
+                ) {
+                    posterUrl = poster
+                }
             }
             .distinctBy {
                 it.url
@@ -171,65 +169,153 @@ class DiziGomProvider : MainAPI() {
     }
 
     /*
-     * /tum-bolumler/ contains direct episode URLs.
-     *
-     * Example:
-     * /ted-lasso-1-sezon-6-bolum/
+     * ---------------------------------------------------------
+     * LATEST EPISODES
+     * ---------------------------------------------------------
      */
+
     private fun parseLatestEpisodes(
         document: Document
     ): List<SearchResponse> {
 
         return document
             .select("a[href]")
-            .mapNotNull { element ->
+            .mapNotNull { link ->
 
-                val href = element
+                val href = link
                     .attr("href")
                     .trim()
                     .takeIf { it.isNotBlank() }
-                    ?.let { fixUrlNull(it) }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
                     ?: return@mapNotNull null
 
                 val match =
                     episodeRegex.find(href)
                         ?: return@mapNotNull null
 
-                val text = element
-                    .text()
-                    .trim()
+                val season = match
+                    .groupValues
+                    .getOrNull(1)
 
-                val season =
-                    match.groupValues
-                        .getOrNull(1)
-
-                val episode =
-                    match.groupValues
-                        .getOrNull(2)
-
-                val title =
-                    text
-                        .takeIf { it.isNotBlank() }
-                        ?: "Sezon $season Bölüm $episode"
+                val episode = match
+                    .groupValues
+                    .getOrNull(2)
 
                 /*
-                 * We intentionally keep the episode URL here.
-                 * load() knows how to resolve an episode page
-                 * back to its series page.
+                 * Kartın yakın çevresinde görsel varsa al.
                  */
+                val parent = link.parent()
+
+                val image =
+                    link.selectFirst("img")
+                        ?: parent?.selectFirst("img")
+                        ?: parent?.parent()?.selectFirst("img")
+
+                val poster = image
+                    ?.attr("src")
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
+
+                /*
+                 * Dizi adı için önce img title.
+                 */
+                val imageTitle = image
+                    ?.attr("title")
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+
+                val imageAlt = image
+                    ?.attr("alt")
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+
+                val linkTitle = link
+                    .attr("title")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+
+                val linkText = link
+                    .text()
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+
+                val seriesName =
+                    imageTitle
+                        ?: imageAlt
+                        ?: linkTitle
+
+                val title = when {
+
+                    !seriesName.isNullOrBlank() -> {
+                        "$seriesName - $season. Sezon $episode. Bölüm"
+                    }
+
+                    !linkText.isNullOrBlank() &&
+                        !linkText.matches(
+                            Regex(
+                                """.*Sezon.*Bölüm.*""",
+                                RegexOption.IGNORE_CASE
+                            )
+                        ) -> {
+                        "$linkText - $season. Sezon $episode. Bölüm"
+                    }
+
+                    else -> {
+                        /*
+                         * Son fallback:
+                         * URL slugından dizi adını çıkar.
+                         */
+                        val slug = href
+                            .substringBeforeLast("/")
+                            .substringAfterLast("/")
+                            .replace(
+                                Regex(
+                                    """-\d+-sezon-\d+-bolum$""",
+                                    RegexOption.IGNORE_CASE
+                                ),
+                                ""
+                            )
+                            .replace("-", " ")
+                            .split(" ")
+                            .joinToString(" ") { word ->
+
+                                word.replaceFirstChar { char ->
+
+                                    if (char.isLowerCase()) {
+                                        char.titlecase()
+                                    } else {
+                                        char.toString()
+                                    }
+                                }
+                            }
+
+                        "$slug - $season. Sezon $episode. Bölüm"
+                    }
+                }
+
                 newTvSeriesSearchResponse(
                     title,
                     href,
                     TvType.TvSeries
                 ) {
-                    posterUrl =
-                        element.imageUrl()
+                    posterUrl = poster
                 }
             }
             .distinctBy {
                 it.url
             }
     }
+
+    /*
+     * ---------------------------------------------------------
+     * SEARCH
+     * ---------------------------------------------------------
+     */
 
     override suspend fun search(
         query: String
@@ -245,48 +331,87 @@ class DiziGomProvider : MainAPI() {
         ).document
 
         /*
-         * Prefer visual search-result cards.
+         * Önce posterli gerçek kartları ara.
          */
-        val cards = document
-            .select(
-                "a[href*='/diziler/']:has(img)"
-            )
-            .mapNotNull {
-                it.toSeriesSearchResponse()
+        val visualResults = document
+            .select("a[href*='/diziler/'] > img[src]")
+            .mapNotNull { image ->
+
+                val link = image.parent()
+                    ?: return@mapNotNull null
+
+                val href = link
+                    .attr("href")
+                    .trim()
+                    .takeIf {
+                        it.contains("/diziler/")
+                    }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
+                    ?: return@mapNotNull null
+
+                val title =
+                    image.attr("title")
+                        .trim()
+                        .takeIf { it.isNotBlank() }
+
+                        ?: image.attr("alt")
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+
+                        ?: return@mapNotNull null
+
+                val poster = image
+                    .attr("src")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
+
+                newTvSeriesSearchResponse(
+                    title,
+                    href,
+                    TvType.TvSeries
+                ) {
+                    posterUrl = poster
+                }
             }
             .distinctBy {
                 it.url
             }
 
-        if (cards.isNotEmpty()) {
-            return cards
+        if (visualResults.isNotEmpty()) {
+            return visualResults
         }
 
         /*
-         * Fallback for simple text search results.
+         * Search sayfası yalnız yazılı sonuç verirse fallback.
          */
         return document
             .select("a[href*='/diziler/']")
-            .mapNotNull { element ->
+            .mapNotNull { link ->
 
-                val href = element
+                val href = link
                     .attr("href")
                     .trim()
                     .takeIf { it.isNotBlank() }
-                    ?.let { fixUrlNull(it) }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
                     ?: return@mapNotNull null
 
-                val title = element
-                    .attr("title")
-                    .trim()
-                    .takeIf { it.isNotBlank() }
-
-                    ?: element
-                        .text()
+                val title =
+                    link.attr("title")
                         .trim()
                         .takeIf { it.isNotBlank() }
 
-                    ?: return@mapNotNull null
+                        ?: link.text()
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+
+                        ?: return@mapNotNull null
 
                 newTvSeriesSearchResponse(
                     title,
@@ -299,151 +424,211 @@ class DiziGomProvider : MainAPI() {
             }
     }
 
+    /*
+     * ---------------------------------------------------------
+     * LOAD SERIES
+     * ---------------------------------------------------------
+     */
+
     override suspend fun load(
         url: String
     ): LoadResponse? {
 
         /*
-         * A result in "Son Eklenen Bölümler" may point
-         * directly to an episode page.
+         * Son Eklenen Bölümler bölümünden gelirsek URL
+         * doğrudan episode URL'si olabilir.
          *
-         * The episode HTML contains:
+         * Episode HTML içinde:
          *
          * #benzerli a[href*='/diziler/']
          *
-         * which links back to the series page.
+         * bize dizinin asıl sayfasını verir.
          */
         val firstDocument = app.get(
             url,
             referer = "$mainUrl/"
         ).document
 
-        val seriesUrl =
-            if (url.contains("/diziler/")) {
+        val seriesUrl = if (
+            url.contains("/diziler/")
+        ) {
 
-                url
+            url
 
-            } else {
+        } else {
 
-                firstDocument
+            firstDocument
+                .selectFirst(
+                    "#benzerli a[href*='/diziler/']"
+                )
+                ?.attr("href")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let {
+                    fixUrlNull(it)
+                }
+                ?: url
+        }
+
+        val document = if (
+            seriesUrl == url
+        ) {
+
+            firstDocument
+
+        } else {
+
+            app.get(
+                seriesUrl,
+                referer = url
+            ).document
+        }
+
+        /*
+         * TITLE
+         */
+        val title =
+            document
+                .selectFirst("h1")
+                ?.text()
+                ?.trim()
+                ?.substringBefore(" izle")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+
+                ?: document
                     .selectFirst(
-                        "#benzerli a[href*='/diziler/']"
+                        "meta[property='og:title']"
                     )
-                    ?.attr("href")
+                    ?.attr("content")
+                    ?.substringBefore(" izle")
+                    ?.substringBefore(" - Dizigom")
                     ?.trim()
                     ?.takeIf { it.isNotBlank() }
-                    ?.let { fixUrlNull(it) }
-                    ?: url
-            }
 
-        val document =
-            if (seriesUrl == url) {
+                ?: return null
 
-                firstDocument
-
-            } else {
-
-                app.get(
-                    seriesUrl,
-                    referer = url
-                ).document
-            }
-
-        val title = document
-            .selectFirst("h1")
-            ?.text()
-            ?.trim()
-            ?.substringBefore(" izle")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-
-            ?: document
+        /*
+         * POSTER
+         */
+        val poster =
+            document
                 .selectFirst(
-                    "meta[property='og:title']"
+                    "meta[property='og:image']"
                 )
                 ?.attr("content")
-                ?.substringBefore(" izle")
-                ?.substringBefore(" - Dizigom")
                 ?.trim()
                 ?.takeIf { it.isNotBlank() }
+                ?.let {
+                    fixUrlNull(it)
+                }
 
-            ?: return null
+                ?: document
+                    .selectFirst("img[src]")
+                    ?.attr("src")
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
 
-        val poster = document
-            .selectFirst(
-                "meta[property='og:image']"
-            )
-            ?.attr("content")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { fixUrlNull(it) }
-
-            ?: document
-                .selectFirst("img[src]")
-                ?.attr("src")
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?.let { fixUrlNull(it) }
-
-        val description = document
-            .selectFirst(
-                "meta[property='og:description']"
-            )
-            ?.attr("content")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-
-            ?: document
+        /*
+         * DESCRIPTION
+         */
+        val description =
+            document
                 .selectFirst(
-                    "meta[name='description']"
+                    "meta[property='og:description']"
                 )
                 ?.attr("content")
                 ?.trim()
                 ?.takeIf { it.isNotBlank() }
 
+                ?: document
+                    .selectFirst(
+                        "meta[name='description']"
+                    )
+                    ?.attr("content")
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+
+        /*
+         * YEAR
+         */
         val year = Regex(
-            """\b(19|20)\d{2}\b"""
+            """Yapım\s*Yılı\s*:?\s*((?:19|20)\d{2})""",
+            RegexOption.IGNORE_CASE
         )
             .find(document.text())
-            ?.value
+            ?.groupValues
+            ?.getOrNull(1)
             ?.toIntOrNull()
 
+            ?: Regex(
+                """\b(?:19|20)\d{2}\b"""
+            )
+                .find(document.text())
+                ?.value
+                ?.toIntOrNull()
+
+        /*
+         * GENRES
+         */
+        val genres = document
+            .select(
+                "a[href*='/tur/'], a[href*='/kategori/'], a[href*='/genre/']"
+            )
+            .map {
+                it.text().trim()
+            }
+            .filter {
+                it.isNotBlank()
+            }
+            .distinct()
+
+        /*
+         * EPISODES
+         *
+         * URL gerçek yapısı:
+         *
+         * /ted-lasso-1-sezon-1-bolum/
+         */
         val episodes = document
             .select("a[href]")
-            .mapNotNull { element ->
+            .mapNotNull { link ->
 
-                val href = element
+                val href = link
                     .attr("href")
                     .trim()
                     .takeIf { it.isNotBlank() }
-                    ?.let { fixUrlNull(it) }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
                     ?: return@mapNotNull null
 
                 val match =
                     episodeRegex.find(href)
                         ?: return@mapNotNull null
 
-                val seasonNumber =
-                    match.groupValues
-                        .getOrNull(1)
-                        ?.toIntOrNull()
+                val seasonNumber = match
+                    .groupValues
+                    .getOrNull(1)
+                    ?.toIntOrNull()
 
-                val episodeNumber =
-                    match.groupValues
-                        .getOrNull(2)
-                        ?.toIntOrNull()
+                val episodeNumber = match
+                    .groupValues
+                    .getOrNull(2)
+                    ?.toIntOrNull()
 
-                val episodeText =
-                    element
-                        .selectFirst(
-                            ".epidosename"
-                        )
+                val episodeName =
+                    link.selectFirst(
+                        ".epidosename"
+                    )
                         ?.text()
                         ?.trim()
                         ?.takeIf { it.isNotBlank() }
 
-                        ?: element
-                            .text()
+                        ?: link.text()
                             .trim()
                             .takeIf { it.isNotBlank() }
 
@@ -465,7 +650,7 @@ class DiziGomProvider : MainAPI() {
                 newEpisode(href) {
 
                     name =
-                        episodeText.ifBlank {
+                        episodeName.ifBlank {
                             "Bölüm"
                         }
 
@@ -492,11 +677,22 @@ class DiziGomProvider : MainAPI() {
             TvType.TvSeries,
             episodes
         ) {
+
             posterUrl = poster
             plot = description
             this.year = year
+
+            if (genres.isNotEmpty()) {
+                tags = genres
+            }
         }
     }
+
+    /*
+     * ---------------------------------------------------------
+     * PLAYER
+     * ---------------------------------------------------------
+     */
 
     override suspend fun loadLinks(
         data: String,
@@ -511,24 +707,24 @@ class DiziGomProvider : MainAPI() {
         ).document
 
         /*
-         * Current DiziGom episode pages use:
+         * Gerçek güncel DiziGom episode HTML:
          *
-         * .video-container iframe
-         *
-         * Current example host:
-         * play2.pilavyerplay.top
+         * <div class="video-container">
+         *   <iframe src="https://play2.pilavyerplay.top/...">
+         * </div>
          */
         val iframeUrls = document
             .select(
-                ".video-container iframe[src], iframe[src]"
+                ".video-container iframe[src], .video iframe[src]"
             )
             .mapNotNull { iframe ->
 
-                iframe
-                    .attr("src")
+                iframe.attr("src")
                     .trim()
                     .takeIf { it.isNotBlank() }
-                    ?.let { fixUrlNull(it) }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
             }
             .distinct()
 
@@ -554,6 +750,7 @@ class DiziGomProvider : MainAPI() {
                 }
 
             } catch (_: Exception) {
+                // Bir iframe hata verirse diğerlerini denemeye devam et.
             }
         }
 
