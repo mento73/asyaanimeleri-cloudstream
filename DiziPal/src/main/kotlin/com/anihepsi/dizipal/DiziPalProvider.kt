@@ -37,7 +37,8 @@ class DiziPalProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-
+        
+   val document = app.get(request.data).document
        val home = document
     .select("a[href*='/series/']")
     .mapNotNull { element ->
