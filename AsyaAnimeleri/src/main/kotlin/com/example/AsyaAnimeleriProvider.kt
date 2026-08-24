@@ -365,7 +365,7 @@ class AsyaAnimeleriProvider : MainAPI() {
             .distinctBy { it.url }
             .take(20)
 
-        return newAnimeLoadResponse(
+        return newTvSeriesLoadResponse(
             title,
             url,
             TvType.Anime
@@ -381,9 +381,7 @@ class AsyaAnimeleriProvider : MainAPI() {
 
             this.recommendations = recommendations
 
-            this.episodes = mutableMapOf(
-    DubStatus.Subbed to episodes
-)
+            this.episodes = episodes
         }
     }
 
