@@ -1,5 +1,27 @@
 [
     {
+        "iconUrl": "https://anm.cx/favicon.ico",
+        "fileHash": "sha256-8b187e3d59d2a40c59b9c3b38cbf5403c27c6f321d62569cdd1ef74e73fd0635",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/mento73/asyaanimeleri-cloudstream",
+        "fileSize": 27580,
+        "status": 1,
+        "language": "tr",
+        "authors": [
+            "keyiflerolsun",
+            "inatchii",
+            "JustRelaxable"
+        ],
+        "tvTypes": [
+            "Anime"
+        ],
+        "version": 1,
+        "internalName": "AnimeciX",
+        "description": "AnimeciX CloudStream extension",
+        "url": "https://raw.githubusercontent.com/mento73/asyaanimeleri-cloudstream/builds/AnimeciX.cs3",
+        "name": "AnimeciX"
+    },
+    {
         "fileHash": "sha256-f037042a4bfe60e715c54463b3b26258f8287d3befbd473e36ca705efb7cf07e",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/mento73/asyaanimeleri-cloudstream",
