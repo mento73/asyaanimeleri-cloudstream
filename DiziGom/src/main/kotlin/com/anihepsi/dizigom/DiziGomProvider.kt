@@ -32,10 +32,6 @@ class DiziGomProvider : MainAPI() {
         "$mainUrl/dizi-izle/" to "Tüm Diziler"
     )
 
-    /*
-     * Örnek bölüm:
-     * /ted-lasso-1-sezon-6-bolum/
-     */
     private val episodeRegex = Regex(
         """-(\d+)-sezon-(\d+)-bolum/?(?:\?.*)?$""",
         RegexOption.IGNORE_CASE
@@ -54,10 +50,6 @@ class DiziGomProvider : MainAPI() {
 
         val url = when {
 
-            /*
-             * Tüm Diziler sayfasında pagination varsa
-             * sonraki sayfaları da destekle.
-             */
             request.name == "Tüm Diziler" && page > 1 ->
                 "$mainUrl/dizi-izle/page/$page/"
 
@@ -70,7 +62,14 @@ class DiziGomProvider : MainAPI() {
             referer = "$mainUrl/"
         ).document
 
-        val results = parseSeriesCards(document)
+        val results = when (request.name) {
+
+            "Tüm Diziler" ->
+                parseAllSeries(document)
+
+            else ->
+                parseLatestSeries(document)
+        }
 
         return newHomePageResponse(
             request.name,
@@ -80,7 +79,11 @@ class DiziGomProvider : MainAPI() {
     }
 
     /*
-     * Gerçek DiziGom kart yapısı:
+     * ---------------------------------------------------------
+     * SON EKLENEN DİZİLER
+     * ---------------------------------------------------------
+     *
+     * Gerçek yapı:
      *
      * <a href=".../diziler/ted-lasso/">
      *     <img
@@ -89,7 +92,8 @@ class DiziGomProvider : MainAPI() {
      *     >
      * </a>
      */
-    private fun parseSeriesCards(
+
+    private fun parseLatestSeries(
         document: Document
     ): List<SearchResponse> {
 
@@ -145,6 +149,62 @@ class DiziGomProvider : MainAPI() {
 
     /*
      * ---------------------------------------------------------
+     * TÜM DİZİLER
+     * ---------------------------------------------------------
+     *
+     * Gerçek yapı:
+     *
+     * <a href=".../diziler/breaking-bad/">
+     *     Breaking Bad
+     * </a>
+     *
+     * Burada poster özellikle çekilmiyor.
+     * Amaç hızlı ve hafif bir tam katalog.
+     */
+
+    private fun parseAllSeries(
+        document: Document
+    ): List<SearchResponse> {
+
+        return document
+            .select("a[href*='/diziler/']")
+            .mapNotNull { link ->
+
+                val href = link
+                    .attr("href")
+                    .trim()
+                    .takeIf {
+                        it.contains("/diziler/")
+                    }
+                    ?.let {
+                        fixUrlNull(it)
+                    }
+                    ?: return@mapNotNull null
+
+                val title =
+                    link.text()
+                        .trim()
+                        .takeIf { it.isNotBlank() }
+
+                        ?: link.attr("title")
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+
+                        ?: return@mapNotNull null
+
+                newTvSeriesSearchResponse(
+                    title,
+                    href,
+                    TvType.TvSeries
+                )
+            }
+            .distinctBy {
+                it.url
+            }
+    }
+
+    /*
+     * ---------------------------------------------------------
      * SEARCH
      * ---------------------------------------------------------
      */
@@ -162,14 +222,18 @@ class DiziGomProvider : MainAPI() {
             referer = "$mainUrl/"
         ).document
 
-        val visualResults = parseSeriesCards(document)
+        /*
+         * Önce posterli arama kartı varsa onu kullan.
+         */
+        val visualResults =
+            parseLatestSeries(document)
 
         if (visualResults.isNotEmpty()) {
             return visualResults
         }
 
         /*
-         * Arama sonucu yalnız yazılı link verirse fallback.
+         * Yoksa normal /diziler/ linklerini tara.
          */
         return document
             .select("a[href*='/diziler/']")
@@ -221,9 +285,6 @@ class DiziGomProvider : MainAPI() {
             referer = "$mainUrl/"
         ).document
 
-        /*
-         * TITLE
-         */
         val title =
             document
                 .selectFirst("h1")
@@ -245,9 +306,6 @@ class DiziGomProvider : MainAPI() {
 
                 ?: return null
 
-        /*
-         * POSTER
-         */
         val poster =
             document
                 .selectFirst(
@@ -269,9 +327,6 @@ class DiziGomProvider : MainAPI() {
                         fixUrlNull(it)
                     }
 
-        /*
-         * DESCRIPTION
-         */
         val description =
             document
                 .selectFirst(
@@ -289,9 +344,6 @@ class DiziGomProvider : MainAPI() {
                     ?.trim()
                     ?.takeIf { it.isNotBlank() }
 
-        /*
-         * YEAR
-         */
         val year =
             Regex(
                 """Yapım\s*Yılı\s*:?\s*((?:19|20)\d{2})""",
@@ -309,9 +361,6 @@ class DiziGomProvider : MainAPI() {
                     ?.value
                     ?.toIntOrNull()
 
-        /*
-         * GENRES
-         */
         val genres = document
             .select(
                 "a[href*='/tur/'], a[href*='/kategori/'], a[href*='/genre/']"
@@ -324,9 +373,6 @@ class DiziGomProvider : MainAPI() {
             }
             .distinct()
 
-        /*
-         * EPISODES
-         */
         val episodes = document
             .select("a[href]")
             .mapNotNull { link ->
@@ -426,10 +472,7 @@ class DiziGomProvider : MainAPI() {
      * PLAYER
      * ---------------------------------------------------------
      *
-     * Şimdilik mevcut Pilavyer iframe'i CloudStream'in
-     * standart extractor sistemine gönderiyoruz.
-     *
-     * Pilavyer extractor işini ayrıca çözeceğiz.
+     * Pilavyer extractor ayrıca ele alınacak.
      */
 
     override suspend fun loadLinks(
