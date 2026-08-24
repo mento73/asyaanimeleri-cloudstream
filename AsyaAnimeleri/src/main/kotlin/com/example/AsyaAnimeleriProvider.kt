@@ -3,6 +3,7 @@ package com.example
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -13,8 +14,8 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  *
  * Modernized for the Anihepsi CloudStream repository.
  *
- * Player handling keeps CloudStream's standard extractor flow.
- * No access-control, DRM or anti-debug bypass is implemented here.
+ * Player handling uses CloudStream's standard extractor flow.
+ * No DRM, anti-debug or access-control bypass is implemented.
  */
 
 class AsyaAnimeleriProvider : MainAPI() {
@@ -32,12 +33,19 @@ class AsyaAnimeleriProvider : MainAPI() {
     )
 
     /*
-     * Kraptor'un eski yapısındaki tür sayfalarını koruyoruz.
-     * Böylece CloudStream ana sayfasında tek dev liste yerine
-     * türlere göre satırlar görebiliriz.
+     * Ana sayfa sırası:
+     *
+     * Son Eklenenler
+     * Popüler Seriler
+     * Tüm Animeler
+     * Türler...
      */
     override val mainPage = mainPageOf(
+        "$mainUrl/#latest" to "Son Eklenenler",
+        "$mainUrl/#popular" to "Popüler Seriler",
+
         "$mainUrl/series/" to "Tüm Animeler",
+
         "$mainUrl/genres/aksiyon/page/sayfa/" to "Aksiyon",
         "$mainUrl/genres/fantastik/page/sayfa/" to "Fantastik",
         "$mainUrl/genres/macera/page/sayfa/" to "Macera",
@@ -55,24 +63,77 @@ class AsyaAnimeleriProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
 
+        /*
+         * #latest ve #popular gerçek HTTP path değil.
+         * Bunları sadece iki ana sayfa bölümünü ayırt etmek
+         * için işaret olarak kullanıyoruz.
+         */
+        if (
+            request.name == "Son Eklenenler" ||
+            request.name == "Popüler Seriler"
+        ) {
+
+            val document = app.get(mainUrl).document
+
+            val animeList = when (request.name) {
+
+                "Son Eklenenler" ->
+                    parseHomeSection(
+                        document = document,
+                        titleTexts = listOf(
+                            "Son Eklenenler"
+                        )
+                    )
+
+                "Popüler Seriler" ->
+                    parseHomeSection(
+                        document = document,
+                        titleTexts = listOf(
+                            "Popüler Serler",
+                            "Popüler Seriler"
+                        )
+                    )
+
+                else ->
+                    emptyList()
+            }
+
+            return newHomePageResponse(
+                request.name,
+                animeList
+            )
+        }
+
+        /*
+         * Normal seri/tür sayfaları.
+         */
         val url = when {
+
             request.data.contains("sayfa") && page == 1 ->
                 request.data
                     .replace("/page/sayfa/", "/")
                     .replace("sayfa", "1")
 
             request.data.contains("sayfa") ->
-                request.data.replace("sayfa", page.toString())
+                request.data.replace(
+                    "sayfa",
+                    page.toString()
+                )
 
-            else -> request.data
+            else ->
+                request.data
         }
 
         val document = app.get(url).document
 
         val animeList = document
             .select("article.bs")
-            .mapNotNull { it.toAnimeCard() }
-            .distinctBy { it.url }
+            .mapNotNull {
+                it.toAnimeCard()
+            }
+            .distinctBy {
+                it.url
+            }
 
         return newHomePageResponse(
             request.name,
@@ -80,6 +141,83 @@ class AsyaAnimeleriProvider : MainAPI() {
         )
     }
 
+    /*
+     * Ana sayfadaki belirli bir başlığın ait olduğu
+     * article.bs bloğunu bulur.
+     *
+     * Site tasarımı değişirse doğrudan nth-child gibi
+     * kırılgan selectorlara bağımlı kalmamak için
+     * başlık metninden başlayıp yukarı doğru gider.
+     */
+    private fun parseHomeSection(
+        document: Document,
+        titleTexts: List<String>
+    ): List<SearchResponse> {
+
+        val heading = document
+            .select(
+                "h1, h2, h3, h4, " +
+                    ".releases h1, " +
+                    ".releases h2, " +
+                    ".releases h3, " +
+                    ".releases h4"
+            )
+            .firstOrNull { element ->
+
+                val text = element
+                    .text()
+                    .trim()
+
+                titleTexts.any {
+                    text.equals(
+                        it,
+                        ignoreCase = true
+                    ) ||
+                        text.contains(
+                            it,
+                            ignoreCase = true
+                        )
+                }
+            }
+            ?: return emptyList()
+
+        /*
+         * Heading genellikle .releases gibi küçük bir div içinde.
+         * Article kartları onun üst parent'ındaki listupd içinde.
+         *
+         * En yakın article.bs içeren parent'ı buluyoruz.
+         */
+        var container: Element? = heading
+
+        repeat(6) {
+
+            container = container?.parent()
+
+            if (container == null) {
+                return@repeat
+            }
+
+            val articles = container!!
+                .select("article.bs")
+
+            if (articles.isNotEmpty()) {
+
+                return articles
+                    .mapNotNull {
+                        it.toHomeAnimeCard()
+                    }
+                    .distinctBy {
+                        it.url
+                    }
+            }
+        }
+
+        return emptyList()
+    }
+
+    /*
+     * Seri/tür sayfalarındaki standart kart.
+     */
     private fun Element.toAnimeCard(): SearchResponse? {
 
         val title = selectFirst("div.tt.tts")
@@ -93,17 +231,28 @@ class AsyaAnimeleriProvider : MainAPI() {
         val href = selectFirst("a")
             ?.absUrl("href")
             ?.trim()
-            ?.takeIf { it.isNotBlank() }
+            ?.takeIf {
+                it.isNotBlank()
+            }
             ?: return null
 
         val img = selectFirst("img")
 
-        val poster = img?.absUrl("src")
-            ?.takeIf { it.isNotBlank() }
-            ?: img?.absUrl("data-src")
-                ?.takeIf { it.isNotBlank() }
-            ?: img?.absUrl("data-lazy-src")
-                ?.takeIf { it.isNotBlank() }
+        val poster = img
+            ?.absUrl("src")
+            ?.takeIf {
+                it.isNotBlank()
+            }
+            ?: img
+                ?.absUrl("data-src")
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+            ?: img
+                ?.absUrl("data-lazy-src")
+                ?.takeIf {
+                    it.isNotBlank()
+                }
 
         return newAnimeSearchResponse(
             title,
@@ -115,61 +264,197 @@ class AsyaAnimeleriProvider : MainAPI() {
     }
 
     /*
-     * Arama için Kraptor'un list-mode yaklaşımını koruyoruz.
-     * Eşleşen animenin detay sayfasından poster de alıyoruz.
+     * Ana sayfadaki Son Eklenenler / Popüler Seriler
+     * kartlarının HTML'i biraz farklı:
+     *
+     * div.tt
+     * span.epx
+     * article.bs
+     *
+     * Burada ekranda görünen seri adını alıyoruz.
+     */
+    private fun Element.toHomeAnimeCard(): SearchResponse? {
+
+        val anchor = selectFirst("a[href]")
+            ?: return null
+
+        val href = anchor
+            .absUrl("href")
+            .trim()
+            .takeIf {
+                it.isNotBlank()
+            }
+            ?: return null
+
+        /*
+         * div.tt içinde seri adı + h2 bölüm başlığı birlikte
+         * bulunduğu için h2'yi kaldırarak yalnız seri adını
+         * almaya çalışıyoruz.
+         */
+        val titleElement = selectFirst("div.tt")
+
+        val title = if (titleElement != null) {
+
+            val clone = titleElement.clone()
+
+            clone
+                .select("h1, h2, h3, h4")
+                .remove()
+
+            clone
+                .text()
+                .trim()
+                .takeIf {
+                    it.isNotBlank()
+                }
+
+        } else {
+            null
+        }
+            ?: selectFirst("h2")
+                ?.text()
+                ?.replace(
+                    Regex(
+                        """(?i)\s+\d+\.\s*Bölüm.*$"""
+                    ),
+                    ""
+                )
+                ?.replace(
+                    Regex(
+                        """(?i)\s+\d+\.Bölüm.*$"""
+                    ),
+                    ""
+                )
+                ?.replace(
+                    Regex(
+                        """(?i)\s+\d+\s*Bölüm.*$"""
+                    ),
+                    ""
+                )
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+            ?: anchor
+                .attr("oldtitle")
+                .trim()
+                .takeIf {
+                    it.isNotBlank()
+                }
+            ?: return null
+
+        val img = selectFirst("img")
+
+        val poster = img
+            ?.absUrl("src")
+            ?.takeIf {
+                it.isNotBlank()
+            }
+            ?: img
+                ?.absUrl("data-src")
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+            ?: img
+                ?.absUrl("data-lazy-src")
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+
+        return newAnimeSearchResponse(
+            title,
+            href,
+            TvType.Anime
+        ) {
+            posterUrl = poster
+        }
+    }
+
+    /*
+     * Arama.
      */
     override suspend fun search(
         query: String,
         page: Int
     ): SearchResponseList? {
 
-        val document = app.get("$mainUrl/series/list-mode/").document
+        val document = app.get(
+            "$mainUrl/series/list-mode/"
+        ).document
 
         val matches = document
             .select("div.soralist li a")
             .filter {
+
                 it.text()
-                    .contains(query, ignoreCase = true)
+                    .contains(
+                        query,
+                        ignoreCase = true
+                    )
             }
             .take(30)
 
-        val results = matches.mapNotNull { element ->
+        val results = matches
+            .mapNotNull { element ->
 
-            val title = element.text().trim()
-            val url = element.absUrl("href").trim()
+                val title = element
+                    .text()
+                    .trim()
 
-            if (title.isBlank() || url.isBlank()) {
-                return@mapNotNull null
-            }
+                val url = element
+                    .absUrl("href")
+                    .trim()
 
-            val detailDocument = try {
-                app.get(url).document
-            } catch (_: Exception) {
-                null
-            }
-
-            val poster = detailDocument
-                ?.selectFirst("div.thumb img")
-                ?.let { img ->
-                    img.absUrl("src")
-                        .takeIf { it.isNotBlank() }
-                        ?: img.absUrl("data-src")
-                            .takeIf { it.isNotBlank() }
+                if (
+                    title.isBlank() ||
+                    url.isBlank()
+                ) {
+                    return@mapNotNull null
                 }
 
-            newAnimeSearchResponse(
-                title,
-                url,
-                TvType.Anime
-            ) {
-                posterUrl = poster
-            }
-        }
+                val detailDocument = try {
 
-        return results.toNewSearchResponseList()
+                    app.get(url).document
+
+                } catch (_: Exception) {
+
+                    null
+                }
+
+                val poster = detailDocument
+                    ?.selectFirst(
+                        "div.thumb img"
+                    )
+                    ?.let { img ->
+
+                        img
+                            .absUrl("src")
+                            .takeIf {
+                                it.isNotBlank()
+                            }
+                            ?: img
+                                .absUrl("data-src")
+                                .takeIf {
+                                    it.isNotBlank()
+                                }
+                    }
+
+                newAnimeSearchResponse(
+                    title,
+                    url,
+                    TvType.Anime
+                ) {
+                    posterUrl = poster
+                }
+            }
+
+        return results
+            .toNewSearchResponseList()
     }
 
-    override suspend fun load(url: String): LoadResponse? {
+    override suspend fun load(
+        url: String
+    ): LoadResponse? {
 
         val document = app.get(url).document
 
@@ -177,7 +462,8 @@ class AsyaAnimeleriProvider : MainAPI() {
             .selectFirst("div.infox h1")
             ?.text()
             ?.trim()
-            ?: document.selectFirst("h1")
+            ?: document
+                .selectFirst("h1")
                 ?.text()
                 ?.trim()
             ?: return null
@@ -185,13 +471,22 @@ class AsyaAnimeleriProvider : MainAPI() {
         val poster = document
             .selectFirst("div.thumb img")
             ?.let { img ->
-                img.absUrl("src")
-                    .takeIf { it.isNotBlank() }
-                    ?: img.absUrl("data-src")
-                        .takeIf { it.isNotBlank() }
+
+                img
+                    .absUrl("src")
+                    .takeIf {
+                        it.isNotBlank()
+                    }
+                    ?: img
+                        .absUrl("data-src")
+                        .takeIf {
+                            it.isNotBlank()
+                        }
             }
             ?: document
-                .selectFirst("meta[property='og:image']")
+                .selectFirst(
+                    "meta[property='og:image']"
+                )
                 ?.attr("content")
                 ?.trim()
 
@@ -199,41 +494,57 @@ class AsyaAnimeleriProvider : MainAPI() {
             .selectFirst("div.entry-content b")
             ?.text()
             ?.trim()
-            ?.takeIf { it.isNotBlank() }
+            ?.takeIf {
+                it.isNotBlank()
+            }
             ?: document
-                .selectFirst("meta[property='og:description']")
+                .selectFirst(
+                    "meta[property='og:description']"
+                )
                 ?.attr("content")
                 ?.trim()
 
         val year = document
             .select(".spe span")
-            .map { it.text().trim() }
+            .map {
+                it.text().trim()
+            }
             .firstOrNull {
+
                 it.contains(
                     "Yayın Yılı:",
                     ignoreCase = true
                 )
             }
             ?.let {
-                Regex("""(19|20)\d{2}""")
+
+                Regex(
+                    """(19|20)\d{2}"""
+                )
                     .find(it)
                     ?.value
                     ?.toIntOrNull()
             }
 
         /*
-         * Genre linklerini doğrudan alıyoruz.
-         * nth-child yapısına göre daha dayanıklı.
+         * Türler.
          */
         val tags = document
-            .select("a[href*='/genres/']")
-            .map { it.text().trim() }
-            .filter { it.isNotBlank() }
+            .select(
+                "a[href*='/genres/']"
+            )
+            .map {
+                it.text().trim()
+            }
+            .filter {
+                it.isNotBlank()
+            }
             .distinct()
 
         val duration = document
             .select(".spe span")
             .firstOrNull {
+
                 it.text().contains(
                     "Dakika",
                     ignoreCase = true
@@ -241,6 +552,7 @@ class AsyaAnimeleriProvider : MainAPI() {
             }
             ?.text()
             ?.let {
+
                 Regex("""\d+""")
                     .find(it)
                     ?.value
@@ -248,10 +560,12 @@ class AsyaAnimeleriProvider : MainAPI() {
             }
 
         /*
-         * Kraptor'un eplister bölüm yapısını önce kullanıyoruz.
+         * Bölümler.
          */
         val structuredEpisodes = document
-            .select("div.eplister ul li")
+            .select(
+                "div.eplister ul li"
+            )
             .mapNotNull { episodeElement ->
 
                 val link = episodeElement
@@ -267,12 +581,16 @@ class AsyaAnimeleriProvider : MainAPI() {
                 }
 
                 val numberText = episodeElement
-                    .selectFirst("div.epl-num")
+                    .selectFirst(
+                        "div.epl-num"
+                    )
                     ?.text()
                     ?.trim()
 
                 val rawTitle = episodeElement
-                    .selectFirst("div.epl-title")
+                    .selectFirst(
+                        "div.epl-title"
+                    )
                     ?.text()
                     ?.trim()
                     .orEmpty()
@@ -280,16 +598,27 @@ class AsyaAnimeleriProvider : MainAPI() {
                 val episodePoster = episodeElement
                     .selectFirst("img")
                     ?.let { img ->
-                        img.absUrl("src")
-                            .takeIf { it.isNotBlank() }
-                            ?: img.absUrl("data-src")
-                                .takeIf { it.isNotBlank() }
-                            ?: img.absUrl("data-lazy-src")
-                                .takeIf { it.isNotBlank() }
+
+                        img
+                            .absUrl("src")
+                            .takeIf {
+                                it.isNotBlank()
+                            }
+                            ?: img
+                                .absUrl("data-src")
+                                .takeIf {
+                                    it.isNotBlank()
+                                }
+                            ?: img
+                                .absUrl("data-lazy-src")
+                                .takeIf {
+                                    it.isNotBlank()
+                                }
                     }
 
                 val episodeNumber = numberText
                     ?.let {
+
                         Regex("""\d+""")
                             .find(it)
                             ?.value
@@ -304,7 +633,9 @@ class AsyaAnimeleriProvider : MainAPI() {
                         ""
                     )
                     .replace(
-                        Regex("""(?i)\s*-\s*izle"""),
+                        Regex(
+                            """(?i)\s*-\s*izle"""
+                        ),
                         ""
                     )
                     .trim()
@@ -313,11 +644,15 @@ class AsyaAnimeleriProvider : MainAPI() {
                         " "
                     )
 
-                newEpisode(episodeUrl) {
+                newEpisode(
+                    episodeUrl
+                ) {
+
                     episode = episodeNumber
                     posterUrl = episodePoster
 
                     name = when {
+
                         cleanedTitle.isNotBlank() ->
                             cleanedTitle
 
@@ -325,20 +660,26 @@ class AsyaAnimeleriProvider : MainAPI() {
                             "Bölüm $episodeNumber"
 
                         else ->
-                            numberText ?: "Bölüm"
+                            numberText
+                                ?: "Bölüm"
                     }
                 }
             }
-            .distinctBy { it.data }
+            .distinctBy {
+                it.data
+            }
 
         /*
-         * Bazı seri sayfalarında eplister yapısı olmayabilir.
-         * O durumda daha önce bizde çalışan genel Bölüm linki
-         * yöntemine geri düşüyoruz.
+         * eplister yoksa fallback.
          */
-        val episodes = if (structuredEpisodes.isNotEmpty()) {
+        val episodes = if (
+            structuredEpisodes.isNotEmpty()
+        ) {
+
             structuredEpisodes
+
         } else {
+
             document
                 .select("a[href]")
                 .mapNotNull { element ->
@@ -358,29 +699,46 @@ class AsyaAnimeleriProvider : MainAPI() {
                             "Bölüm",
                             ignoreCase = true
                         ) ||
-                        episodeUrl.contains("/series/")
+                        episodeUrl.contains(
+                            "/series/"
+                        )
                     ) {
                         return@mapNotNull null
                     }
 
-                    val number = Regex("""\d+""")
+                    val number = Regex(
+                        """\d+"""
+                    )
                         .find(text)
                         ?.value
                         ?.toIntOrNull()
 
-                    newEpisode(episodeUrl) {
+                    newEpisode(
+                        episodeUrl
+                    ) {
                         name = text
                         episode = number
                     }
                 }
-                .distinctBy { it.data }
+                .distinctBy {
+                    it.data
+                }
         }
 
+        /*
+         * Öneriler.
+         */
         val recommendations = document
             .select("article.bs")
-            .mapNotNull { it.toAnimeCard() }
-            .filter { it.url != url }
-            .distinctBy { it.url }
+            .mapNotNull {
+                it.toAnimeCard()
+            }
+            .filter {
+                it.url != url
+            }
+            .distinctBy {
+                it.url
+            }
             .take(20)
 
         return newTvSeriesLoadResponse(
@@ -389,8 +747,10 @@ class AsyaAnimeleriProvider : MainAPI() {
             TvType.Anime,
             episodes
         ) {
+
             posterUrl = poster
             plot = description
+
             this.year = year
             this.tags = tags
 
@@ -398,23 +758,28 @@ class AsyaAnimeleriProvider : MainAPI() {
                 this.duration = duration
             }
 
-            this.recommendations = recommendations
+            this.recommendations =
+                recommendations
         }
     }
 
     /*
-     * Mirror seçenekleri Base64 HTML içeriyor.
+     * PLAYER
      *
-     * Önceki sürümde OK.ru / Odnoklassniki kasıtlı olarak
-     * filtreleniyordu. Artık host ayrımı yapmadan bütün normal
-     * iframe URL'lerini CloudStream loadExtractor() sistemine
-     * iletiyoruz.
+     * Mirror seçeneklerinin value alanındaki Base64 HTML'i
+     * çözüyoruz ve iframe URL'sini CloudStream'e veriyoruz.
      *
-     * Böylece Sibnet / Voe / Dailymotion yanında CloudStream
-     * tarafından desteklenen diğer hostların da denenmesine
-     * izin veriyoruz.
+     * Önceki sürümde:
+     * - ok.ru
+     * - odnoklassniki
+     *
+     * özel olarak engelleniyordu.
+     *
+     * Artık blacklist yok.
      */
-    @OptIn(ExperimentalEncodingApi::class)
+    @OptIn(
+        ExperimentalEncodingApi::class
+    )
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -427,11 +792,11 @@ class AsyaAnimeleriProvider : MainAPI() {
             referer = "$mainUrl/"
         ).document
 
-        val playerUrls = mutableListOf<String>()
+        val playerUrls =
+            mutableListOf<String>()
 
         /*
-         * 1) Mirror select seçeneklerinin içindeki
-         * Base64 iframe HTML'lerini çözüyoruz.
+         * Mirror dropdown.
          */
         document
             .select(
@@ -446,30 +811,43 @@ class AsyaAnimeleriProvider : MainAPI() {
                         .attr("value")
                         .trim()
 
-                    if (encodedHtml.isBlank()) {
+                    if (
+                        encodedHtml.isBlank()
+                    ) {
                         return@forEach
                     }
 
                     val decodedHtml = Base64
-                        .decode(encodedHtml)
-                        .toString(Charsets.UTF_8)
+                        .decode(
+                            encodedHtml
+                        )
+                        .toString(
+                            Charsets.UTF_8
+                        )
 
                     val iframeSrc = Regex(
                         """src\s*=\s*["']([^"']+)["']""",
                         RegexOption.IGNORE_CASE
                     )
-                        .find(decodedHtml)
+                        .find(
+                            decodedHtml
+                        )
                         ?.groupValues
                         ?.getOrNull(1)
                         ?.trim()
                         ?: return@forEach
 
-                    val cleanUrl = normalizePlayerUrl(
-                        iframeSrc
-                    )
+                    val cleanUrl =
+                        normalizePlayerUrl(
+                            iframeSrc
+                        )
 
-                    if (cleanUrl.isNotBlank()) {
-                        playerUrls.add(cleanUrl)
+                    if (
+                        cleanUrl.isNotBlank()
+                    ) {
+                        playerUrls.add(
+                            cleanUrl
+                        )
                     }
 
                 } catch (_: Exception) {
@@ -477,40 +855,55 @@ class AsyaAnimeleriProvider : MainAPI() {
             }
 
         /*
-         * 2) Bazı eski/yeni bölüm sayfalarında iframe
-         * doğrudan HTML içinde bulunabiliyor.
+         * Doğrudan iframe fallback.
          */
         document
-            .select("iframe[src]")
+            .select(
+                "iframe[src]"
+            )
             .mapNotNull { iframe ->
 
                 iframe
                     .attr("src")
                     .trim()
-                    .takeIf { it.isNotBlank() }
-
+                    .takeIf {
+                        it.isNotBlank()
+                    }
             }
             .mapNotNull { iframeSrc ->
 
                 try {
-                    normalizePlayerUrl(iframeSrc)
+
+                    normalizePlayerUrl(
+                        iframeSrc
+                    )
+
                 } catch (_: Exception) {
+
                     null
                 }
-
             }
-            .filter { it.isNotBlank() }
+            .filter {
+                it.isNotBlank()
+            }
             .forEach {
+
                 playerUrls.add(it)
             }
 
         var found = false
 
         /*
-         * 3) Host adına göre hiçbir şeyi engellemiyoruz.
+         * Host ayrımı yapmıyoruz.
          *
-         * CloudStream'in kayıtlı extractor sisteminin
-         * URL'yi tanımasına izin veriyoruz.
+         * Sibnet
+         * Voe
+         * Dailymotion
+         * OK.ru / Odnoklassniki
+         * Mail.ru
+         * vb.
+         *
+         * CloudStream'in kayıtlı extractor sistemine gönderilir.
          */
         playerUrls
             .distinct()
@@ -518,12 +911,14 @@ class AsyaAnimeleriProvider : MainAPI() {
 
                 try {
 
-                    val success = loadExtractor(
-                        url = playerUrl,
-                        referer = data,
-                        subtitleCallback = subtitleCallback,
-                        callback = callback
-                    )
+                    val success =
+                        loadExtractor(
+                            url = playerUrl,
+                            referer = data,
+                            subtitleCallback =
+                                subtitleCallback,
+                            callback = callback
+                        )
 
                     if (success) {
                         found = true
@@ -537,13 +932,7 @@ class AsyaAnimeleriProvider : MainAPI() {
     }
 
     /*
-     * Player URL'leri bazen:
-     *
-     * //example.com/...
-     * https:\/\/example.com/...
-     * /relative/path
-     *
-     * şeklinde gelebiliyor.
+     * Player URL normalize.
      */
     private fun normalizePlayerUrl(
         rawUrl: String
@@ -551,15 +940,26 @@ class AsyaAnimeleriProvider : MainAPI() {
 
         val cleaned = rawUrl
             .trim()
-            .replace("\\/", "/")
-            .replace("&amp;", "&")
+            .replace(
+                "\\/",
+                "/"
+            )
+            .replace(
+                "&amp;",
+                "&"
+            )
 
         return when {
+
             cleaned.startsWith("//") ->
                 "https:$cleaned"
 
-            cleaned.startsWith("http://") ||
-                cleaned.startsWith("https://") ->
+            cleaned.startsWith(
+                "http://"
+            ) ||
+                cleaned.startsWith(
+                    "https://"
+                ) ->
                 cleaned
 
             else ->
