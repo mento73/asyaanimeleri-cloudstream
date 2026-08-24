@@ -7,7 +7,8 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 class AnimeciXPlugin : BasePlugin() {
 
     override fun load() {
-        registerMainAPI(AnimeciXProvider())
-        registerExtractorAPI(TauVideo())
-    }
+    registerMainAPI(AnimeciXProvider())
+    registerExtractorAPI(TauVideo())
+    registerExtractorAPI(TauVideo2())
+}
 }
