@@ -141,19 +141,22 @@ class AnimeciXProvider : MainAPI() {
                     headers = apiHeaders
                 ).parsedSafe<TitleVideos>()
 
-                seasonResponse
-                    ?.videos
-                    ?.forEach { video ->
+               seasonResponse
+    ?.videos
+    ?.forEach { video ->
 
-                        episodes.add(
-                            newEpisode(video.url) {
-    name =
-        "${video.seasonNum}. Sezon ${video.episodeNum}. Bölüm"
+        episodes.add(
+            newEpisode(video.url) {
+                name =
+                    "${video.seasonNum}. Sezon ${video.episodeNum}. Bölüm"
 
-    this.season = video.seasonNum
-    this.episode = video.episodeNum
-}
+                this.season = video.seasonNum
+                this.episode = video.episodeNum
             }
+        )
+    }
+    
+ }
 
         } else {
 
