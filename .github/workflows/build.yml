@@ -58,5 +58,10 @@ jobs:
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
           git add .
-          git commit -m "Build $GITHUB_SHA" || exit 0
-          git push
+
+          git diff --cached --quiet || git commit -m "Build $GITHUB_SHA"
+
+          git fetch origin builds
+          git rebase origin/builds
+
+          git push origin builds
