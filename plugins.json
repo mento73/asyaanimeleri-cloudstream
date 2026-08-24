@@ -22,10 +22,10 @@
         "name": "AnimeciX"
     },
     {
-        "fileHash": "sha256-dc650fcfb09a2538704d8900795db6367d826c3e17d40d86975f1ec4c3323317",
+        "fileHash": "sha256-b4727587301c61e0176fd2bc0bf55768ffa3fe0235a2f3b8a9697d6d153dd9d3",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/mento73/asyaanimeleri-cloudstream",
-        "fileSize": 19729,
+        "fileSize": 22027,
         "status": 1,
         "language": "tr",
         "authors": [
