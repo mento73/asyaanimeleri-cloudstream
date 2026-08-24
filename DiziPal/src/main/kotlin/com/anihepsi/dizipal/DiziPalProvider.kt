@@ -217,133 +217,163 @@ class DiziPalProvider : MainAPI() {
         search(query)
 
     override suspend fun load(
-        url: String
-    ): LoadResponse? {
+    url: String
+): LoadResponse? {
 
-        val document = app.get(url).document
-
-        val poster =
-            fixUrlNull(
-                document
-                    .selectFirst("[property='og:image']")
-                    ?.attr("content")
-            )
-
-        val year =
-            document
-                .selectXpath(
-                    "//div[text()='Yapım Yılı']//following-sibling::div"
-                )
-                .text()
-                .trim()
-                .toIntOrNull()
-
-        val description =
-            document
-                .selectFirst("div.summary p")
-                ?.text()
-                ?.trim()
-
-        val tags =
-            document
-                .selectXpath(
-                    "//div[text()='Türler']//following-sibling::div"
-                )
-                .text()
-                .trim()
-                .split(" ")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-
-        val duration =
-            Regex("""\d+""")
-                .find(
-                    document
-                        .selectXpath(
-                            "//div[text()='Ortalama Süre']//following-sibling::div"
-                        )
-                        .text()
-                )
-                ?.value
-                ?.toIntOrNull()
-
-        return if (url.contains("/series/")) {
-
-            val title =
-                document
-                    .selectFirst("div.cover h5")
-                    ?.text()
-                    ?.trim()
-                    ?: return null
-
-            val episodes = document
-    .select("a[href*='/bolum/']")
-    .mapNotNull { element ->
-
-        val episodeUrl = fixUrlNull(
-            element.attr("href")
-        ) ?: return@mapNotNull null
-
-        val text = element
-            .text()
-            .trim()
-
-        val match = Regex(
-            """(\d+)\.\s*Sezon\s+(\d+)\.\s*Bölüm""",
-            RegexOption.IGNORE_CASE
-        ).find(text)
-
-        val seasonNumber =
-            match?.groupValues?.getOrNull(1)?.toIntOrNull()
-
-        val episodeNumber =
-            match?.groupValues?.getOrNull(2)?.toIntOrNull()
-
-        newEpisode(episodeUrl) {
-            name = text
-            this.season = seasonNumber
-            this.episode = episodeNumber
-        }
+    val cleanUrl = if (url.startsWith("http")) {
+        url
+    } else {
+        fixUrl(url)
     }
-    .distinctBy { it.data }
 
-            newTvSeriesLoadResponse(
-                title,
-                url,
-                TvType.TvSeries,
-                episodes
-            ) {
-                posterUrl = poster
-                this.year = year
-                plot = description
-                this.tags = tags
-                this.duration = duration
+    val document = try {
+        app.get(
+            cleanUrl,
+            headers = mapOf(
+                "User-Agent" to
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/131.0.0.0 Safari/537.36",
+                "Accept-Language" to "tr-TR,tr;q=0.9,en;q=0.8"
+            ),
+            referer = "$mainUrl/"
+        ).document
+    } catch (_: Exception) {
+        return null
+    }
+
+    val title = document
+        .selectFirst("h1")
+        ?.text()
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?: document
+            .selectFirst("[property='og:title']")
+            ?.attr("content")
+            ?.substringBefore("1080P")
+            ?.trim()
+        ?: return null
+
+    val poster = document
+        .selectFirst("[property='og:image']")
+        ?.attr("content")
+        ?.takeIf { it.isNotBlank() }
+        ?.let { fixUrlNull(it) }
+        ?: document
+            .selectFirst("img")
+            ?.let { img ->
+                img.attr("src")
+                    .takeIf { it.isNotBlank() }
+                    ?: img.attr("data-src")
+                        .takeIf { it.isNotBlank() }
             }
+            ?.let { fixUrlNull(it) }
 
-        } else {
+    val description = document
+        .selectFirst("[property='og:description']")
+        ?.attr("content")
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?: document
+            .selectFirst("div.summary p")
+            ?.text()
+            ?.trim()
 
-            val title =
-                document
-                    .selectXpath(
-                        "//div[@class='g-title'][2]/div"
-                    )
+    val year = Regex("""\b(19|20)\d{2}\b""")
+        .find(document.text())
+        ?.value
+        ?.toIntOrNull()
+
+    /*
+     * Current DiziPal series pages use /series/ URLs.
+     */
+    if (cleanUrl.contains("/series/")) {
+
+        val episodes = document
+            .select("a[href*='/bolum/']")
+            .mapNotNull { element ->
+
+                val episodeUrl = element
+                    .attr("href")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+                    ?.let { fixUrlNull(it) }
+                    ?: return@mapNotNull null
+
+                val text = element
                     .text()
                     .trim()
+                    .ifBlank {
+                        element.attr("title").trim()
+                    }
 
-            newMovieLoadResponse(
-                title,
-                url,
-                TvType.Movie,
-                url
-            ) {
-                posterUrl = poster
-                this.year = year
-                plot = description
-                this.tags = tags
-                this.duration = duration
+                val seasonEpisode = Regex(
+                    """(\d+)\.?\s*Sezon\s+(\d+)\.?\s*Bölüm""",
+                    RegexOption.IGNORE_CASE
+                ).find(text)
+
+                val seasonNumber = seasonEpisode
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.toIntOrNull()
+
+                val episodeNumber = seasonEpisode
+                    ?.groupValues
+                    ?.getOrNull(2)
+                    ?.toIntOrNull()
+
+                newEpisode(episodeUrl) {
+                    name = text
+                        .takeIf { it.isNotBlank() }
+                        ?: buildString {
+                            if (seasonNumber != null) {
+                                append("$seasonNumber. Sezon ")
+                            }
+
+                            if (episodeNumber != null) {
+                                append("$episodeNumber. Bölüm")
+                            }
+                        }
+                        .ifBlank { "Bölüm" }
+
+                    this.season = seasonNumber
+                    this.episode = episodeNumber
+                }
             }
+            .distinctBy { it.data }
+            .sortedWith(
+                compareBy<Episode>(
+                    { it.season ?: 0 },
+                    { it.episode ?: 0 }
+                )
+            )
+
+        return newTvSeriesLoadResponse(
+            title,
+            cleanUrl,
+            TvType.TvSeries,
+            episodes
+        ) {
+            posterUrl = poster
+            plot = description
+            this.year = year
         }
     }
+
+    /*
+     * Everything that is not a series is treated as a movie for now.
+     */
+    return newMovieLoadResponse(
+        title,
+        cleanUrl,
+        TvType.Movie,
+        cleanUrl
+    ) {
+        posterUrl = poster
+        plot = description
+        this.year = year
+    }
+}
 
     override suspend fun loadLinks(
         data: String,
