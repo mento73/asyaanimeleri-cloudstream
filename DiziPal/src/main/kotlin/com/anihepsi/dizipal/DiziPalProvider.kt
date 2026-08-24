@@ -14,7 +14,7 @@ import org.jsoup.nodes.Element
 
 class DiziPalProvider : MainAPI() {
 
-    override var mainUrl = "https://dizipal950.com"
+    override var mainUrl = "https://dizipal1577.com"
     override var name = "DiziPal"
     override var lang = "tr"
 
