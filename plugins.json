@@ -41,10 +41,10 @@
         "name": "AsyaAnimeleri"
     },
     {
-        "fileHash": "sha256-4f09764a8b69a6201c3f1a9eaba1528ca6ebe9194b04d4e1f65d8966a86b0201",
+        "fileHash": "sha256-2fb6fa36600d61e15d62cc1959f842e618a1d506ab17dd0b59fd55e76b8de79e",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/mento73/asyaanimeleri-cloudstream",
-        "fileSize": 15145,
+        "fileSize": 14441,
         "status": 1,
         "language": "tr",
         "authors": [
