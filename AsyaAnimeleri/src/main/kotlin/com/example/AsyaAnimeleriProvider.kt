@@ -366,10 +366,11 @@ class AsyaAnimeleriProvider : MainAPI() {
             .take(20)
 
         return newTvSeriesLoadResponse(
-            title,
-            url,
-            TvType.Anime
-        ) {
+    title,
+    url,
+    TvType.Anime,
+    episodes
+) {
             posterUrl = poster
             plot = description
             this.year = year
@@ -381,7 +382,6 @@ class AsyaAnimeleriProvider : MainAPI() {
 
             this.recommendations = recommendations
 
-            this.episodes = episodes
         }
     }
 
