@@ -1,3 +1,5 @@
+// Original TauVideo extractor by @keyiflerolsun / KekikAkademi.
+// Modernized for the Anihepsi CloudStream repository.
 package com.anihepsi.animecix
 
 import com.fasterxml.jackson.annotation.JsonProperty
