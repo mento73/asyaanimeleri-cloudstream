@@ -147,14 +147,12 @@ class AnimeciXProvider : MainAPI() {
 
                         episodes.add(
                             newEpisode(video.url) {
-                                name =
-                                    "${video.seasonNum}. Sezon ${video.episodeNum}. Bölüm"
+    name =
+        "${video.seasonNum}. Sezon ${video.episodeNum}. Bölüm"
 
-                                season = video.seasonNum
-                                episode = video.episodeNum
-                            }
-                        )
-                    }
+    this.season = video.seasonNum
+    this.episode = video.episodeNum
+}
             }
 
         } else {
