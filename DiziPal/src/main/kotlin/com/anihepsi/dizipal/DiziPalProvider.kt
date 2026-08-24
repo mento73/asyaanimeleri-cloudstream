@@ -376,88 +376,31 @@ class DiziPalProvider : MainAPI() {
 }
 
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
 
-        val document = app.get(data).document
+    val document = app.get(
+        data,
+        referer = "$mainUrl/"
+    ).document
 
-        val iframe =
-            document
-                .selectFirst(".series-player-container iframe")
-                ?.attr("src")
-                ?: document
-                    .selectFirst("div#vast_new iframe")
-                    ?.attr("src")
-                ?: return false
+    val iframeUrl = document
+        .selectFirst("iframe[src]")
+        ?.attr("src")
+        ?.takeIf { it.isNotBlank() }
+        ?.let { fixUrl(it) }
 
-        val iframeUrl = fixUrl(iframe)
-
-        val source =
-            app.get(
-                iframeUrl,
-                referer = "$mainUrl/"
-            ).text
-
-        val m3u8 =
-            Regex("""file:"([^"]+)"""")
-                .find(source)
-                ?.groupValues
-                ?.getOrNull(1)
-
-        if (m3u8 == null) {
-            return loadExtractor(
-                iframeUrl,
-                "$mainUrl/",
-                subtitleCallback,
-                callback
-            )
-        }
-
-        val subtitles =
-            Regex(""""subtitle":"([^"]+)"""")
-                .find(source)
-                ?.groupValues
-                ?.getOrNull(1)
-
-        subtitles
-            ?.split(",")
-            ?.forEach { subtitle ->
-
-                val language =
-                    subtitle
-                        .substringAfter("[")
-                        .substringBefore("]")
-
-                val subtitleUrl =
-                    subtitle.replace(
-                        "[$language]",
-                        ""
-                    )
-
-                if (subtitleUrl.isNotBlank()) {
-                    subtitleCallback(
-                        SubtitleFile(
-                            language,
-                            fixUrl(subtitleUrl)
-                        )
-                    )
-                }
-            }
-
-        callback(
-            newExtractorLink(
-                source = name,
-                name = name,
-                url = m3u8,
-                type = INFER_TYPE
-            ) {
-                referer = "$mainUrl/"
-            }
+    if (iframeUrl != null) {
+        return loadExtractor(
+            iframeUrl,
+            data,
+            subtitleCallback,
+            callback
         )
-
-        return true
     }
+
+    return false
 }
