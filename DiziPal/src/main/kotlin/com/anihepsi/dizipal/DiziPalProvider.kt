@@ -29,42 +29,53 @@ class DiziPalProvider : MainAPI() {
     override var sequentialMainPage = true
 
     override val mainPage = mainPageOf(
-        "$mainUrl/diziler/son-bolumler" to "Son Bölümler",
-        "$mainUrl/diziler" to "Yeni Diziler",
-        "$mainUrl/filmler" to "Yeni Filmler",
-        "$mainUrl/koleksiyon/netflix" to "Netflix",
-        "$mainUrl/koleksiyon/exxen" to "Exxen",
-        "$mainUrl/koleksiyon/blutv" to "BluTV",
-        "$mainUrl/koleksiyon/disney" to "Disney+",
-        "$mainUrl/koleksiyon/amazon-prime" to "Amazon Prime",
-        "$mainUrl/koleksiyon/tod-bein" to "TOD",
-        "$mainUrl/koleksiyon/gain" to "Gain"
-    )
+    "$mainUrl/yeni-eklenen-dizi-bolumler" to "Son Bölümler",
+    "$mainUrl/" to "Ana Sayfa"
+)
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
 
-        val document = app.get(request.data).document
+       val home = document
+    .select("a[href*='/series/']")
+    .mapNotNull { element ->
 
-        val home =
-            if (request.data.contains("/diziler/son-bolumler")) {
-                document
-                    .select("div.episode-item")
-                    .mapNotNull { it.toLatestEpisode() }
-            } else {
-                document
-                    .select("article.type2 ul li")
-                    .mapNotNull { it.toSearchResult() }
+        val href = fixUrlNull(
+            element.attr("href")
+        ) ?: return@mapNotNull null
+
+        val title = element
+            .text()
+            .trim()
+            .takeIf { it.isNotBlank() }
+            ?: element
+                .selectFirst("img")
+                ?.attr("alt")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            ?: return@mapNotNull null
+
+        val poster = element
+            .selectFirst("img")
+            ?.let { img ->
+                img.attr("src")
+                    .takeIf { it.isNotBlank() }
+                    ?: img.attr("data-src")
+                        .takeIf { it.isNotBlank() }
             }
+            ?.let { fixUrlNull(it) }
 
-        return newHomePageResponse(
-            request.name,
-            home,
-            hasNext = false
-        )
+        newTvSeriesSearchResponse(
+            title,
+            href,
+            TvType.TvSeries
+        ) {
+            posterUrl = poster
+        }
     }
+    .distinctBy { it.url }
 
     private fun Element.toLatestEpisode(): SearchResponse? {
 
