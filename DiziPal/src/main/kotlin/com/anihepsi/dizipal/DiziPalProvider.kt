@@ -267,7 +267,7 @@ class DiziPalProvider : MainAPI() {
                 ?.value
                 ?.toIntOrNull()
 
-        return if (url.contains("/dizi/")) {
+        return if (url.contains("/series/")) {
 
             val title =
                 document
@@ -276,50 +276,36 @@ class DiziPalProvider : MainAPI() {
                     ?.trim()
                     ?: return null
 
-            val episodes =
-                document
-                    .select("div.episode-item")
-                    .mapNotNull { element ->
+            val episodes = document
+    .select("a[href*='/bolum/']")
+    .mapNotNull { element ->
 
-                        val episodeName =
-                            element
-                                .selectFirst("div.name")
-                                ?.text()
-                                ?.trim()
-                                ?: return@mapNotNull null
+        val episodeUrl = fixUrlNull(
+            element.attr("href")
+        ) ?: return@mapNotNull null
 
-                        val episodeUrl =
-                            fixUrlNull(
-                                element
-                                    .selectFirst("a")
-                                    ?.attr("href")
-                            ) ?: return@mapNotNull null
+        val text = element
+            .text()
+            .trim()
 
-                        val info =
-                            element
-                                .selectFirst("div.episode")
-                                ?.text()
-                                ?.trim()
-                                ?.split(" ")
+        val match = Regex(
+            """(\d+)\.\s*Sezon\s+(\d+)\.\s*Bölüm""",
+            RegexOption.IGNORE_CASE
+        ).find(text)
 
-                        val season =
-                            info
-                                ?.getOrNull(0)
-                                ?.replace(".", "")
-                                ?.toIntOrNull()
+        val seasonNumber =
+            match?.groupValues?.getOrNull(1)?.toIntOrNull()
 
-                        val episode =
-                            info
-                                ?.getOrNull(2)
-                                ?.replace(".", "")
-                                ?.toIntOrNull()
+        val episodeNumber =
+            match?.groupValues?.getOrNull(2)?.toIntOrNull()
 
-                        newEpisode(episodeUrl) {
-                            name = episodeName
-                            this.season = season
-                            this.episode = episode
-                        }
-                    }
+        newEpisode(episodeUrl) {
+            name = text
+            this.season = seasonNumber
+            this.episode = episodeNumber
+        }
+    }
+    .distinctBy { it.data }
 
             newTvSeriesLoadResponse(
                 title,
