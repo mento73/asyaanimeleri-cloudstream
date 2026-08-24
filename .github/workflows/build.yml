@@ -49,7 +49,7 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE/builds"
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
-          cp "$GITHUB_WORKSPACE/src/AsyaAnimeleri/build/AsyaAnimeleri.cs3" .
+          find "$GITHUB_WORKSPACE/src" -type f -name "*.cs3" -exec cp -v {} "$GITHUB_WORKSPACE/builds/" \;
           cp "$GITHUB_WORKSPACE/src/build/plugins.json" .
 
       - name: Push builds
