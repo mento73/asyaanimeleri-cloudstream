@@ -4,9 +4,18 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
-import java.nio.charset.Charset
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+
+/*
+ * Original provider lineage:
+ * Kekik / Kraptor ecosystem.
+ *
+ * Modernized for the Anihepsi CloudStream repository.
+ *
+ * Player handling keeps CloudStream's standard extractor flow.
+ * No access-control, DRM or anti-debug bypass is implemented here.
+ */
 
 class AsyaAnimeleriProvider : MainAPI() {
 
@@ -197,15 +206,20 @@ class AsyaAnimeleriProvider : MainAPI() {
                 ?.trim()
 
         val year = document
-    .select(".spe span")
-    .map { it.text().trim() }
-    .firstOrNull { it.contains("Yayın Yılı:", ignoreCase = true) }
-    ?.let {
-        Regex("""(19|20)\d{2}""")
-            .find(it)
-            ?.value
-            ?.toIntOrNull()
-    }
+            .select(".spe span")
+            .map { it.text().trim() }
+            .firstOrNull {
+                it.contains(
+                    "Yayın Yılı:",
+                    ignoreCase = true
+                )
+            }
+            ?.let {
+                Regex("""(19|20)\d{2}""")
+                    .find(it)
+                    ?.value
+                    ?.toIntOrNull()
+            }
 
         /*
          * Genre linklerini doğrudan alıyoruz.
@@ -220,7 +234,10 @@ class AsyaAnimeleriProvider : MainAPI() {
         val duration = document
             .select(".spe span")
             .firstOrNull {
-                it.text().contains("Dakika", ignoreCase = true)
+                it.text().contains(
+                    "Dakika",
+                    ignoreCase = true
+                )
             }
             ?.text()
             ?.let {
@@ -260,16 +277,17 @@ class AsyaAnimeleriProvider : MainAPI() {
                     ?.trim()
                     .orEmpty()
 
-                 val episodePoster = episodeElement
+                val episodePoster = episodeElement
                     .selectFirst("img")
                     ?.let { img ->
-                    img.absUrl("src")
-                   .takeIf { it.isNotBlank() }
-                    ?: img.absUrl("data-src")
-                   .takeIf { it.isNotBlank() }
-                   ?: img.absUrl("data-lazy-src")
-                   .takeIf { it.isNotBlank() }
-    }
+                        img.absUrl("src")
+                            .takeIf { it.isNotBlank() }
+                            ?: img.absUrl("data-src")
+                                .takeIf { it.isNotBlank() }
+                            ?: img.absUrl("data-lazy-src")
+                                .takeIf { it.isNotBlank() }
+                    }
+
                 val episodeNumber = numberText
                     ?.let {
                         Regex("""\d+""")
@@ -296,20 +314,20 @@ class AsyaAnimeleriProvider : MainAPI() {
                     )
 
                 newEpisode(episodeUrl) {
-    episode = episodeNumber
-    posterUrl = episodePoster
+                    episode = episodeNumber
+                    posterUrl = episodePoster
 
-    name = when {
-        cleanedTitle.isNotBlank() ->
-            cleanedTitle
+                    name = when {
+                        cleanedTitle.isNotBlank() ->
+                            cleanedTitle
 
-        episodeNumber != null ->
-            "Bölüm $episodeNumber"
+                        episodeNumber != null ->
+                            "Bölüm $episodeNumber"
 
-        else ->
-            numberText ?: "Bölüm"
-    }
-}
+                        else ->
+                            numberText ?: "Bölüm"
+                    }
+                }
             }
             .distinctBy { it.data }
 
@@ -366,11 +384,11 @@ class AsyaAnimeleriProvider : MainAPI() {
             .take(20)
 
         return newTvSeriesLoadResponse(
-    title,
-    url,
-    TvType.Anime,
-    episodes
-) {
+            title,
+            url,
+            TvType.Anime,
+            episodes
+        ) {
             posterUrl = poster
             plot = description
             this.year = year
@@ -381,14 +399,20 @@ class AsyaAnimeleriProvider : MainAPI() {
             }
 
             this.recommendations = recommendations
-
         }
     }
 
     /*
-     * Kraptor'un mirror mantığını güncel sayfalar için
-     * biraz genişletiyoruz. OK.ru bizde siyah ekran verdiği
-     * için şimdilik bilinçli olarak atlanıyor.
+     * Mirror seçenekleri Base64 HTML içeriyor.
+     *
+     * Önceki sürümde OK.ru / Odnoklassniki kasıtlı olarak
+     * filtreleniyordu. Artık host ayrımı yapmadan bütün normal
+     * iframe URL'lerini CloudStream loadExtractor() sistemine
+     * iletiyoruz.
+     *
+     * Böylece Sibnet / Voe / Dailymotion yanında CloudStream
+     * tarafından desteklenen diğer hostların da denenmesine
+     * izin veriyoruz.
      */
     @OptIn(ExperimentalEncodingApi::class)
     override suspend fun loadLinks(
@@ -398,95 +422,104 @@ class AsyaAnimeleriProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val document = app.get(data).document
+        val document = app.get(
+            data,
+            referer = "$mainUrl/"
+        ).document
 
-        val options = document.select(
-            "select.mirror option[value], select option[value]"
-        )
-
-        var found = false
-
-        options.forEach { option ->
-
-            try {
-                val encodedHtml = option
-                    .attr("value")
-                    .trim()
-
-                if (encodedHtml.isBlank()) {
-                    return@forEach
-                }
-
-                val decodedHtml = Base64
-                    .decode(encodedHtml)
-                    .toString(Charset.defaultCharset())
-
-                val iframeSrc = Regex(
-                    """src=["'](.*?)["']"""
-                )
-                    .find(decodedHtml)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?: return@forEach
-
-                val cleanUrl = iframeSrc
-                    .replace(
-                        Regex("""^//"""),
-                        "https://"
-                    )
-                    .replace(
-                        """\/""",
-                        "/"
-                    )
-                    .let { fixUrl(it) }
-
-                if (
-                    cleanUrl.contains(
-                        "ok.ru",
-                        ignoreCase = true
-                    ) ||
-                    cleanUrl.contains(
-                        "odnoklassniki",
-                        ignoreCase = true
-                    )
-                ) {
-                    return@forEach
-                }
-
-                val success = loadExtractor(
-                    url = cleanUrl,
-                    referer = "$mainUrl/",
-                    subtitleCallback = subtitleCallback,
-                    callback = callback
-                )
-
-                if (success) {
-                    found = true
-                }
-
-            } catch (_: Exception) {
-            }
-        }
+        val playerUrls = mutableListOf<String>()
 
         /*
-         * Bazı eski sayfalarda doğrudan iframe bulunabilir.
-         * Mirror listesinde bulunmayan destekli hostları da
-         * kaybetmeyelim.
+         * 1) Mirror select seçeneklerinin içindeki
+         * Base64 iframe HTML'lerini çözüyoruz.
+         */
+        document
+            .select(
+                "select.mirror option[value], " +
+                    "select option[value]"
+            )
+            .forEach { option ->
+
+                try {
+
+                    val encodedHtml = option
+                        .attr("value")
+                        .trim()
+
+                    if (encodedHtml.isBlank()) {
+                        return@forEach
+                    }
+
+                    val decodedHtml = Base64
+                        .decode(encodedHtml)
+                        .toString(Charsets.UTF_8)
+
+                    val iframeSrc = Regex(
+                        """src\s*=\s*["']([^"']+)["']""",
+                        RegexOption.IGNORE_CASE
+                    )
+                        .find(decodedHtml)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.trim()
+                        ?: return@forEach
+
+                    val cleanUrl = normalizePlayerUrl(
+                        iframeSrc
+                    )
+
+                    if (cleanUrl.isNotBlank()) {
+                        playerUrls.add(cleanUrl)
+                    }
+
+                } catch (_: Exception) {
+                }
+            }
+
+        /*
+         * 2) Bazı eski/yeni bölüm sayfalarında iframe
+         * doğrudan HTML içinde bulunabiliyor.
          */
         document
             .select("iframe[src]")
-            .map { it.absUrl("src") }
-            .filter { it.isNotBlank() }
-            .distinct()
-            .filterNot {
-                it.contains("ok.ru", true) ||
-                it.contains("odnoklassniki", true)
+            .mapNotNull { iframe ->
+
+                iframe
+                    .attr("src")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+
             }
-            .forEach { iframeUrl ->
+            .mapNotNull { iframeSrc ->
 
                 try {
+                    normalizePlayerUrl(iframeSrc)
+                } catch (_: Exception) {
+                    null
+                }
+
+            }
+            .filter { it.isNotBlank() }
+            .forEach {
+                playerUrls.add(it)
+            }
+
+        var found = false
+
+        /*
+         * 3) Host adına göre hiçbir şeyi engellemiyoruz.
+         *
+         * CloudStream'in kayıtlı extractor sisteminin
+         * URL'yi tanımasına izin veriyoruz.
+         */
+        playerUrls
+            .distinct()
+            .forEach { playerUrl ->
+
+                try {
+
                     val success = loadExtractor(
-                        url = iframeUrl,
+                        url = playerUrl,
                         referer = data,
                         subtitleCallback = subtitleCallback,
                         callback = callback
@@ -501,5 +534,36 @@ class AsyaAnimeleriProvider : MainAPI() {
             }
 
         return found
+    }
+
+    /*
+     * Player URL'leri bazen:
+     *
+     * //example.com/...
+     * https:\/\/example.com/...
+     * /relative/path
+     *
+     * şeklinde gelebiliyor.
+     */
+    private fun normalizePlayerUrl(
+        rawUrl: String
+    ): String {
+
+        val cleaned = rawUrl
+            .trim()
+            .replace("\\/", "/")
+            .replace("&amp;", "&")
+
+        return when {
+            cleaned.startsWith("//") ->
+                "https:$cleaned"
+
+            cleaned.startsWith("http://") ||
+                cleaned.startsWith("https://") ->
+                cleaned
+
+            else ->
+                fixUrl(cleaned)
+        }
     }
 }
