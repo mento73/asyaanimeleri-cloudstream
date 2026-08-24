@@ -34,49 +34,57 @@ class DiziPalProvider : MainAPI() {
 )
 
     override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-        
-   val document = app.get(request.data).document
-       val home = document
-    .select("a[href*='/series/']")
-    .mapNotNull { element ->
+    page: Int,
+    request: MainPageRequest
+): HomePageResponse {
 
-        val href = fixUrlNull(
-            element.attr("href")
-        ) ?: return@mapNotNull null
+    val document = app.get(request.data).document
 
-        val title = element
-            .text()
-            .trim()
-            .takeIf { it.isNotBlank() }
-            ?: element
+    val home = document
+        .select("a[href*='/series/']")
+        .mapNotNull { element ->
+
+            val href = fixUrlNull(
+                element.attr("href")
+            ) ?: return@mapNotNull null
+
+            val title = element
+                .text()
+                .trim()
+                .takeIf { it.isNotBlank() }
+                ?: element
+                    .selectFirst("img")
+                    ?.attr("alt")
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+
+            val poster = element
                 .selectFirst("img")
-                ?.attr("alt")
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-            ?: return@mapNotNull null
-
-        val poster = element
-            .selectFirst("img")
-            ?.let { img ->
-                img.attr("src")
-                    .takeIf { it.isNotBlank() }
-                    ?: img.attr("data-src")
+                ?.let { img ->
+                    img.attr("src")
                         .takeIf { it.isNotBlank() }
-            }
-            ?.let { fixUrlNull(it) }
+                        ?: img.attr("data-src")
+                            .takeIf { it.isNotBlank() }
+                }
+                ?.let { fixUrlNull(it) }
 
-        newTvSeriesSearchResponse(
-            title,
-            href,
-            TvType.TvSeries
-        ) {
-            posterUrl = poster
+            newTvSeriesSearchResponse(
+                title,
+                href,
+                TvType.TvSeries
+            ) {
+                posterUrl = poster
+            }
         }
-    }
-    .distinctBy { it.url }
+        .distinctBy { it.url }
+
+    return newHomePageResponse(
+        request.name,
+        home,
+        hasNext = false
+    )
+}
 
     private fun Element.toLatestEpisode(): SearchResponse? {
 
