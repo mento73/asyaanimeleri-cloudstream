@@ -3,10 +3,18 @@ package com.anihepsi.dizigom
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-// Original DiziGom provider lineage: Kekik / Kraptor ecosystem.
-// Modernized for the Anihepsi CloudStream repository.
+/*
+ * DiziGom provider
+ *
+ * Original provider lineage:
+ * Kekik / Kraptor ecosystem.
+ *
+ * Modernized for the Anihepsi CloudStream repository
+ * using the current DiziGom site structure.
+ */
 
 class DiziGomProvider : MainAPI() {
 
@@ -26,61 +34,86 @@ class DiziGomProvider : MainAPI() {
         "$mainUrl/tum-bolumler/" to "Son Eklenen Bölümler"
     )
 
-    private fun Element.getPoster(): String? {
+    /*
+     * Current episode URLs look like:
+     *
+     * /ted-lasso-1-sezon-6-bolum/
+     */
+    private val episodeRegex = Regex(
+        """-(\d+)-sezon-(\d+)-bolum/?(?:\?.*)?$""",
+        RegexOption.IGNORE_CASE
+    )
 
-        val img = selectFirst("img") ?: return null
+    private fun Element.imageUrl(): String? {
 
-        val value =
-            img.attr("data-src").takeIf { it.isNotBlank() }
-                ?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
-                ?: img.attr("src").takeIf { it.isNotBlank() }
+        val image =
+            if (tagName() == "img") {
+                this
+            } else {
+                selectFirst("img")
+            } ?: return null
 
-        return value?.let { fixUrlNull(it) }
+        val src =
+            image.attr("src")
+                .trim()
+                .takeIf { it.isNotBlank() }
+                ?: image.attr("data-src")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+                ?: image.attr("data-lazy-src")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+
+        return src?.let {
+            fixUrlNull(it)
+        }
     }
 
-    private fun Element.toSeriesResult(): SearchResponse? {
+    private fun Element.seriesTitle(): String? {
 
-        val link = when {
-            tagName() == "a" -> this
-            else -> selectFirst("a[href*='/diziler/']")
-        } ?: return null
+        return selectFirst("img")
+            ?.attr("alt")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
 
-        val href = link
-            .attr("href")
+            ?: attr("title")
+                .trim()
+                .takeIf { it.isNotBlank() }
+
+            ?: selectFirst(
+                ".title, .name, h2, h3, h4"
+            )
+                ?.text()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+
+            ?: text()
+                .trim()
+                .takeIf { it.isNotBlank() }
+    }
+
+    private fun Element.toSeriesSearchResponse(): SearchResponse? {
+
+        val href = attr("href")
             .trim()
             .takeIf {
                 it.contains("/diziler/")
             }
-            ?.let { fixUrlNull(it) }
+            ?.let {
+                fixUrlNull(it)
+            }
             ?: return null
 
         val title =
-            link.selectFirst("img")
-                ?.attr("alt")
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?: link.attr("title")
-                    .trim()
-                    .takeIf { it.isNotBlank() }
-                ?: selectFirst("h2, h3, h4, .title, .name")
-                    ?.text()
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                ?: link.text()
-                    .trim()
-                    .takeIf { it.isNotBlank() }
+            seriesTitle()
                 ?: return null
-
-        val poster =
-            link.getPoster()
-                ?: getPoster()
 
         return newTvSeriesSearchResponse(
             title,
             href,
             TvType.TvSeries
         ) {
-            posterUrl = poster
+            posterUrl = imageUrl()
         }
     }
 
@@ -89,163 +122,67 @@ class DiziGomProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
 
-        val url =
-            if (page > 1 && request.data == "$mainUrl/") {
-                "$mainUrl/page/$page/"
-            } else {
-                request.data
-            }
-
         val document = app.get(
-            url,
+            request.data,
             referer = "$mainUrl/"
         ).document
 
         val results =
             if (request.name == "Son Eklenen Bölümler") {
 
-                document
-                    .select("a[href]")
-                    .mapNotNull { element ->
-
-                        val href = element
-                            .attr("href")
-                            .trim()
-
-                        val text = element
-                            .text()
-                            .trim()
-
-                        val match = Regex(
-                            """(\d+)\.?\s*Sezon\s+(\d+)\.?\s*Bölüm""",
-                            RegexOption.IGNORE_CASE
-                        ).find(text)
-
-                        if (match == null) {
-                            return@mapNotNull null
-                        }
-
-                        /*
-                         * On the episode list we link back to the series
-                         * page whenever possible.
-                         */
-                        val parent = element.parent()
-
-                        val seriesLink =
-                            parent
-                                ?.selectFirst("a[href*='/diziler/']")
-                                ?: element
-                                    .closest("li, article, div")
-                                    ?.selectFirst("a[href*='/diziler/']")
-
-                        seriesLink?.toSeriesResult()
-                    }
-                    .distinctBy { it.url }
+                parseLatestEpisodes(document)
 
             } else {
 
-                document
-                    .select("a[href*='/diziler/']")
-                    .mapNotNull {
-                        it.toSeriesResult()
-                    }
-                    .distinctBy { it.url }
+                parseLatestSeries(document)
             }
 
         return newHomePageResponse(
             request.name,
             results,
-            hasNext = request.data == "$mainUrl/"
+            hasNext = false
         )
     }
 
-    override suspend fun search(
-        query: String
+    /*
+     * Important:
+     *
+     * The site header contains a huge alphabetical list of
+     * /diziler/ links without posters.
+     *
+     * Therefore we only accept series links that actually
+     * contain an image.
+     */
+    private fun parseLatestSeries(
+        document: Document
     ): List<SearchResponse> {
 
-        val q = query
-            .trim()
-            .replace(" ", "+")
-
-        val document = app.get(
-            "$mainUrl/?s=$q",
-            referer = "$mainUrl/"
-        ).document
-
         return document
-            .select("a[href*='/diziler/']")
-            .mapNotNull {
-                it.toSeriesResult()
-            }
-            .distinctBy { it.url }
-    }
-
-    override suspend fun load(
-        url: String
-    ): LoadResponse? {
-
-        val document = app.get(
-            url,
-            referer = "$mainUrl/"
-        ).document
-
-        val title = document
-            .selectFirst("h1")
-            ?.text()
-            ?.trim()
-            ?.substringBefore(" izle")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: document
-                .selectFirst("meta[property='og:title']")
-                ?.attr("content")
-                ?.substringBefore(" izle")
-                ?.trim()
-            ?: return null
-
-        val poster = document
-            .selectFirst("meta[property='og:image']")
-            ?.attr("content")
-            ?.takeIf { it.isNotBlank() }
-            ?.let { fixUrlNull(it) }
-            ?: document
-                .selectFirst("img")
-                ?.let { img ->
-                    img.attr("data-src")
-                        .takeIf { it.isNotBlank() }
-                        ?: img.attr("src")
-                            .takeIf { it.isNotBlank() }
-                }
-                ?.let { fixUrlNull(it) }
-
-        val description = document
-            .selectFirst("meta[property='og:description']")
-            ?.attr("content")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-
-        val year = Regex(
-            """Yapım\s*Yılı\s*:\s*((?:19|20)\d{2})""",
-            RegexOption.IGNORE_CASE
-        )
-            .find(document.text())
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.toIntOrNull()
-
-        val episodes = document
-            .select("a[href]")
+            .select(
+                "a[href*='/diziler/']:has(img)"
+            )
             .mapNotNull { element ->
 
-                val text = element
-                    .text()
-                    .trim()
+                element.toSeriesSearchResponse()
+            }
+            .distinctBy {
+                it.url
+            }
+    }
 
-                val match = Regex(
-                    """(\d+)\.?\s*Sezon\s+(\d+)\.?\s*Bölüm""",
-                    RegexOption.IGNORE_CASE
-                ).find(text)
-                    ?: return@mapNotNull null
+    /*
+     * /tum-bolumler/ contains direct episode URLs.
+     *
+     * Example:
+     * /ted-lasso-1-sezon-6-bolum/
+     */
+    private fun parseLatestEpisodes(
+        document: Document
+    ): List<SearchResponse> {
+
+        return document
+            .select("a[href]")
+            .mapNotNull { element ->
 
                 val href = element
                     .attr("href")
@@ -254,26 +191,294 @@ class DiziGomProvider : MainAPI() {
                     ?.let { fixUrlNull(it) }
                     ?: return@mapNotNull null
 
-                if (href.contains("/diziler/")) {
-                    return@mapNotNull null
-                }
+                val match =
+                    episodeRegex.find(href)
+                        ?: return@mapNotNull null
 
-                val seasonNumber =
-                    match.groupValues[1].toIntOrNull()
+                val text = element
+                    .text()
+                    .trim()
 
-                val episodeNumber =
-                    match.groupValues[2].toIntOrNull()
+                val season =
+                    match.groupValues
+                        .getOrNull(1)
 
-                newEpisode(href) {
-                    name = text
-                        .replace("İzledim", "")
-                        .trim()
+                val episode =
+                    match.groupValues
+                        .getOrNull(2)
 
-                    this.season = seasonNumber
-                    this.episode = episodeNumber
+                val title =
+                    text
+                        .takeIf { it.isNotBlank() }
+                        ?: "Sezon $season Bölüm $episode"
+
+                /*
+                 * We intentionally keep the episode URL here.
+                 * load() knows how to resolve an episode page
+                 * back to its series page.
+                 */
+                newTvSeriesSearchResponse(
+                    title,
+                    href,
+                    TvType.TvSeries
+                ) {
+                    posterUrl =
+                        element.imageUrl()
                 }
             }
-            .distinctBy { it.data }
+            .distinctBy {
+                it.url
+            }
+    }
+
+    override suspend fun search(
+        query: String
+    ): List<SearchResponse> {
+
+        val encodedQuery = query
+            .trim()
+            .replace(" ", "+")
+
+        val document = app.get(
+            "$mainUrl/?s=$encodedQuery",
+            referer = "$mainUrl/"
+        ).document
+
+        /*
+         * Prefer visual search-result cards.
+         */
+        val cards = document
+            .select(
+                "a[href*='/diziler/']:has(img)"
+            )
+            .mapNotNull {
+                it.toSeriesSearchResponse()
+            }
+            .distinctBy {
+                it.url
+            }
+
+        if (cards.isNotEmpty()) {
+            return cards
+        }
+
+        /*
+         * Fallback for simple text search results.
+         */
+        return document
+            .select("a[href*='/diziler/']")
+            .mapNotNull { element ->
+
+                val href = element
+                    .attr("href")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+                    ?.let { fixUrlNull(it) }
+                    ?: return@mapNotNull null
+
+                val title = element
+                    .attr("title")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+
+                    ?: element
+                        .text()
+                        .trim()
+                        .takeIf { it.isNotBlank() }
+
+                    ?: return@mapNotNull null
+
+                newTvSeriesSearchResponse(
+                    title,
+                    href,
+                    TvType.TvSeries
+                )
+            }
+            .distinctBy {
+                it.url
+            }
+    }
+
+    override suspend fun load(
+        url: String
+    ): LoadResponse? {
+
+        /*
+         * A result in "Son Eklenen Bölümler" may point
+         * directly to an episode page.
+         *
+         * The episode HTML contains:
+         *
+         * #benzerli a[href*='/diziler/']
+         *
+         * which links back to the series page.
+         */
+        val firstDocument = app.get(
+            url,
+            referer = "$mainUrl/"
+        ).document
+
+        val seriesUrl =
+            if (url.contains("/diziler/")) {
+
+                url
+
+            } else {
+
+                firstDocument
+                    .selectFirst(
+                        "#benzerli a[href*='/diziler/']"
+                    )
+                    ?.attr("href")
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { fixUrlNull(it) }
+                    ?: url
+            }
+
+        val document =
+            if (seriesUrl == url) {
+
+                firstDocument
+
+            } else {
+
+                app.get(
+                    seriesUrl,
+                    referer = url
+                ).document
+            }
+
+        val title = document
+            .selectFirst("h1")
+            ?.text()
+            ?.trim()
+            ?.substringBefore(" izle")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+            ?: document
+                .selectFirst(
+                    "meta[property='og:title']"
+                )
+                ?.attr("content")
+                ?.substringBefore(" izle")
+                ?.substringBefore(" - Dizigom")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+
+            ?: return null
+
+        val poster = document
+            .selectFirst(
+                "meta[property='og:image']"
+            )
+            ?.attr("content")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { fixUrlNull(it) }
+
+            ?: document
+                .selectFirst("img[src]")
+                ?.attr("src")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { fixUrlNull(it) }
+
+        val description = document
+            .selectFirst(
+                "meta[property='og:description']"
+            )
+            ?.attr("content")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+            ?: document
+                .selectFirst(
+                    "meta[name='description']"
+                )
+                ?.attr("content")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+
+        val year = Regex(
+            """\b(19|20)\d{2}\b"""
+        )
+            .find(document.text())
+            ?.value
+            ?.toIntOrNull()
+
+        val episodes = document
+            .select("a[href]")
+            .mapNotNull { element ->
+
+                val href = element
+                    .attr("href")
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+                    ?.let { fixUrlNull(it) }
+                    ?: return@mapNotNull null
+
+                val match =
+                    episodeRegex.find(href)
+                        ?: return@mapNotNull null
+
+                val seasonNumber =
+                    match.groupValues
+                        .getOrNull(1)
+                        ?.toIntOrNull()
+
+                val episodeNumber =
+                    match.groupValues
+                        .getOrNull(2)
+                        ?.toIntOrNull()
+
+                val episodeText =
+                    element
+                        .selectFirst(
+                            ".epidosename"
+                        )
+                        ?.text()
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() }
+
+                        ?: element
+                            .text()
+                            .trim()
+                            .takeIf { it.isNotBlank() }
+
+                        ?: buildString {
+
+                            if (seasonNumber != null) {
+                                append(
+                                    "$seasonNumber. Sezon "
+                                )
+                            }
+
+                            if (episodeNumber != null) {
+                                append(
+                                    "$episodeNumber. Bölüm"
+                                )
+                            }
+                        }
+
+                newEpisode(href) {
+
+                    name =
+                        episodeText.ifBlank {
+                            "Bölüm"
+                        }
+
+                    this.season =
+                        seasonNumber
+
+                    this.episode =
+                        episodeNumber
+                }
+            }
+            .distinctBy {
+                it.data
+            }
             .sortedWith(
                 compareBy<Episode>(
                     { it.season ?: 0 },
@@ -283,7 +488,7 @@ class DiziGomProvider : MainAPI() {
 
         return newTvSeriesLoadResponse(
             title,
-            url,
+            seriesUrl,
             TvType.TvSeries,
             episodes
         ) {
@@ -305,8 +510,18 @@ class DiziGomProvider : MainAPI() {
             referer = "$mainUrl/"
         ).document
 
+        /*
+         * Current DiziGom episode pages use:
+         *
+         * .video-container iframe
+         *
+         * Current example host:
+         * play2.pilavyerplay.top
+         */
         val iframeUrls = document
-            .select("iframe[src]")
+            .select(
+                ".video-container iframe[src], iframe[src]"
+            )
             .mapNotNull { iframe ->
 
                 iframe
@@ -316,6 +531,10 @@ class DiziGomProvider : MainAPI() {
                     ?.let { fixUrlNull(it) }
             }
             .distinct()
+
+        if (iframeUrls.isEmpty()) {
+            return false
+        }
 
         var found = false
 
