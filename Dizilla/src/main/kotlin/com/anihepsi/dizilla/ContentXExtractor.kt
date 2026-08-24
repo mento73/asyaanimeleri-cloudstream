@@ -7,7 +7,6 @@ import android.util.Log
 import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.fixUrl
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -29,7 +28,10 @@ open class ContentX : ExtractorApi() {
 
         val extRef = referer ?: ""
 
-        Log.d("Dizilla", "ContentX url » $url")
+        Log.d(
+            "Dizilla",
+            "ContentX url » $url"
+        )
 
         val iSource = app.get(
             url,
@@ -50,7 +52,8 @@ open class ContentX : ExtractorApi() {
         /*
          * Altyazılar
          */
-        val subUrls = mutableSetOf<String>()
+        val subUrls =
+            mutableSetOf<String>()
 
         Regex(
             """"file":"((?:\\\"|[^"])+)","label":"((?:\\\"|[^"])+)""""
@@ -68,9 +71,10 @@ open class ContentX : ExtractorApi() {
                     .replace("\\u0026", "&")
                     .replace("\\", "")
 
-                val subLang = decodeSubtitleLanguage(
-                    subLangRaw
-                )
+                val subLang =
+                    decodeSubtitleLanguage(
+                        subLangRaw
+                    )
 
                 if (
                     subUrl.isBlank() ||
@@ -81,12 +85,18 @@ open class ContentX : ExtractorApi() {
 
                 subUrls.add(subUrl)
 
-                subtitleCallback.invoke(
-                    SubtitleFile(
-                        lang = subLang,
-                        url = fixUrl(subUrl)
+                val cleanSubtitleUrl =
+                    normalizeUrl(subUrl)
+
+                if (cleanSubtitleUrl != null) {
+
+                    subtitleCallback.invoke(
+                        SubtitleFile(
+                            lang = subLang,
+                            url = cleanSubtitleUrl
+                        )
                     )
-                )
+                }
             }
 
         /*
@@ -118,13 +128,16 @@ open class ContentX : ExtractorApi() {
                 url = m3uLink,
                 type = ExtractorLinkType.M3U8
             ) {
-                headers = playerHeaders(url)
-                quality = Qualities.Unknown.value
+                headers =
+                    playerHeaders(url)
+
+                quality =
+                    Qualities.Unknown.value
             }
         )
 
         /*
-         * Türkçe dublaj varsa ikinci kaynak olarak ekle.
+         * Türkçe dublaj varsa ikinci kaynak.
          */
         val iDublaj = Regex(
             ""","([^']+)","Türkçe""""
@@ -151,21 +164,65 @@ open class ContentX : ExtractorApi() {
 
             if (dublajExtract != null) {
 
-                val dublajLink = dublajExtract
-                    .replace("\\", "")
+                val dublajLink =
+                    dublajExtract
+                        .replace("\\", "")
 
                 callback.invoke(
                     newExtractorLink(
                         source = name,
-                        name = "$name Türkçe Dublaj",
+                        name =
+                            "$name Türkçe Dublaj",
                         url = dublajLink,
-                        type = ExtractorLinkType.M3U8
+                        type =
+                            ExtractorLinkType.M3U8
                     ) {
-                        headers = playerHeaders(url)
-                        quality = Qualities.Unknown.value
+                        headers =
+                            playerHeaders(url)
+
+                        quality =
+                            Qualities.Unknown.value
                     }
                 )
             }
+        }
+    }
+
+    private fun normalizeUrl(
+        rawUrl: String
+    ): String? {
+
+        val cleaned = rawUrl
+            .trim()
+            .replace("\\/", "/")
+            .replace("&amp;", "&")
+
+        if (cleaned.isBlank()) {
+            return null
+        }
+
+        return when {
+
+            cleaned.startsWith(
+                "https://"
+            ) ||
+                cleaned.startsWith(
+                    "http://"
+                ) ->
+                cleaned
+
+            cleaned.startsWith(
+                "//"
+            ) ->
+                "https:$cleaned"
+
+            cleaned.startsWith(
+                "/"
+            ) ->
+                "$mainUrl$cleaned"
+
+            else ->
+                "$mainUrl/$cleaned"
         }
     }
 
@@ -175,10 +232,14 @@ open class ContentX : ExtractorApi() {
 
         return mapOf(
             "Referer" to refererUrl,
+
             "User-Agent" to
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                "Chrome/124.0.0.0 Safari/537.36"
+                "Mozilla/5.0 " +
+                "(Windows NT 10.0; Win64; x64) " +
+                "AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) " +
+                "Chrome/124.0.0.0 " +
+                "Safari/537.36"
         )
     }
 
