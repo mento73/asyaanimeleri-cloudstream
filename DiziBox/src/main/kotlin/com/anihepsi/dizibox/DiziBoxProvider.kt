@@ -50,6 +50,39 @@ class DiziBoxProvider : MainAPI() {
             "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     )
 
+    override suspend fun getMainPage(
+    page: Int,
+    request: MainPageRequest
+): HomePageResponse {
+
+    val url =
+        if (page <= 1) {
+            request.data
+        } else {
+            "${request.data.trimEnd('/')}/page/$page/"
+        }
+
+    val document = app.get(
+        url,
+        headers = headers,
+        referer = "$mainUrl/"
+    ).document
+
+    val results = document
+        .select("article.detailed-article")
+        .mapNotNull { article ->
+            article.toSearchResult()
+        }
+        .distinctBy {
+            it.url
+        }
+
+    return newHomePageResponse(
+        request.name,
+        results,
+        hasNext = results.isNotEmpty()
+    )
+}
     override suspend fun quickSearch(
         query: String
     ): List<SearchResponse> {
