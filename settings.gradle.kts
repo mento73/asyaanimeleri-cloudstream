@@ -1,6 +1,11 @@
 rootProject.name = "AsyaAnimeleriCloudstream"
 
-val disabled = listOf<String>()
+val disabled = listOf(
+    "DiziGom",
+    "DiziPal",
+    "Dizilla",
+    "HDFilmCehennemi"
+)
 
 File(rootDir, ".").eachDir { dir ->
     if (!disabled.contains(dir.name) && File(dir, "build.gradle.kts").exists()) {
@@ -9,5 +14,7 @@ File(rootDir, ".").eachDir { dir ->
 }
 
 fun File.eachDir(block: (File) -> Unit) {
-    listFiles()?.filter { it.isDirectory }?.forEach { block(it) }
+    listFiles()
+        ?.filter { it.isDirectory }
+        ?.forEach { block(it) }
 }
