@@ -1,5 +1,6 @@
 package com.anihepsi.hdfilmcehennemi
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -22,7 +23,7 @@ class HdfilmcehennemiProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "tr"
 
-    override val hasQuickSearch = true
+    override val hasQuickSearch = false
     override val hasDownloadSupport = true
 
     override val supportedTypes = setOf(
@@ -422,174 +423,111 @@ class HdfilmcehennemiProvider : MainAPI() {
     /*
      * SEARCH
      *
-     * HDFilmCehennemi'nin kendi arama endpoint'i güvenilir çalışmadığı için,
-     * doğrudan çalıştığını bildiğimiz katalog sayfalarını tarıyoruz.
+     * Hexated'in orijinal Hdfilmcehennemi sağlayıcısındaki
+     * sunucu taraflı arama akışı kullanılıyor.
      *
-     * İlk sürüm yalnızca ilk sayfayı tarıyordu.
-     * Şimdi film ve dizi kataloglarında 15 sayfaya kadar ilerliyoruz.
+     * Quick search kapalı; CloudStream arama gönderildiğinde
+     * doğrudan search() çalışır.
      */
-
-    override suspend fun quickSearch(
-        query: String
-    ): List<SearchResponse> {
-        return search(query)
-    }
 
     override suspend fun search(
         query: String
     ): List<SearchResponse> {
 
-        val normalizedQuery =
-            normalizeSearchText(query)
-
-        if (normalizedQuery.isBlank()) {
-            return emptyList()
-        }
-
-        val results =
-            mutableListOf<SearchResponse>()
-
-        val searchSources =
-            listOf(
-                SearchSource(
-                    baseUrl = "$mainUrl/",
-                    type = TvType.Movie
+        val response =
+            app.post(
+                "$mainUrl/search/",
+                data = mapOf(
+                    "query" to query
                 ),
-                SearchSource(
-                    baseUrl = "$mainUrl/category/tavsiye-filmler-izle3/",
-                    type = TvType.Movie
-                ),
-                SearchSource(
-                    baseUrl = "$mainUrl/yabancidiziizle-5/",
-                    type = TvType.TvSeries
-                ),
-                SearchSource(
-                    baseUrl = "$mainUrl/category/populer-diziler-2/",
-                    type = TvType.TvSeries
+                referer = "$mainUrl/",
+                headers = mapOf(
+                    "Accept" to
+                        "application/json, text/javascript, */*; q=0.01",
+                    "X-Requested-With" to
+                        "XMLHttpRequest"
                 )
             )
 
-        for (source in searchSources) {
-
-            for (page in 1..15) {
-
-                val pageUrl =
-                    if (page == 1) {
-                        source.baseUrl
-                    } else {
-                        source.baseUrl
-                            .trimEnd('/') + "/page/$page/"
-                    }
-
-                try {
-
-                    val document =
-                        app.get(
-                            pageUrl,
-                            headers = browserHeaders,
-                            referer = "$mainUrl/"
-                        ).document
-
-                    val pageResults =
-                        document
-                            .select("a[href]")
-                            .mapNotNull {
-                                it.toCatalogResult(
-                                    source.type
-                                )
-                            }
-                            .distinctBy {
-                                it.url
-                            }
-
-                    if (pageResults.isEmpty()) {
-                        break
-                    }
-
-                    val matches =
-                        pageResults
-                            .filter {
-                                searchMatches(
-                                    it,
-                                    normalizedQuery
-                                )
-                            }
-
-                    if (matches.isNotEmpty()) {
-
-                        results.addAll(
-                            matches
-                        )
-
-                        break
-                    }
-
-                } catch (_: Exception) {
-                    break
-                }
+        return response
+            .parsedSafe<Result>()
+            ?.result
+            ?.mapNotNull {
+                it.toSearchResponse()
             }
-        }
-
-        return results
-            .distinctBy {
+            ?.distinctBy {
                 it.url
             }
+            ?: emptyList()
     }
 
-    private fun searchMatches(
-        result: SearchResponse,
-        normalizedQuery: String
-    ): Boolean {
+    private fun Media.toSearchResponse():
+        SearchResponse? {
 
-        val normalizedName =
-            normalizeSearchText(
-                result.name
-            )
+        val mediaTitle =
+            title
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?: return null
 
-        val slug =
-            result.url
-                .substringBefore("?")
-                .trimEnd('/')
-                .substringAfterLast('/')
-                .replace("-", " ")
-                .replace("_", " ")
+        val mediaSlug =
+            slug
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?: return null
 
-        val normalizedSlug =
-            normalizeSearchText(
-                slug
-            )
+        val mediaUrl =
+            "$mainUrl/${slugPrefix.orEmpty()}$mediaSlug"
 
-        return normalizedName.contains(
-            normalizedQuery
-        ) ||
-            normalizedSlug.contains(
-                normalizedQuery
-            )
+        val mediaPoster =
+            poster
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?.let {
+                    "$mainUrl/uploads/poster/$it"
+                }
+
+        val isSeries =
+            slugPrefix
+                .orEmpty()
+                .contains(
+                    "dizi",
+                    ignoreCase = true
+                ) ||
+                mediaUrl.contains(
+                    "/dizi/",
+                    ignoreCase = true
+                )
+
+        return if (isSeries) {
+
+            newTvSeriesSearchResponse(
+                mediaTitle,
+                mediaUrl,
+                TvType.TvSeries
+            ) {
+                posterUrl =
+                    mediaPoster
+            }
+
+        } else {
+
+            newMovieSearchResponse(
+                mediaTitle,
+                mediaUrl,
+                TvType.Movie
+            ) {
+                posterUrl =
+                    mediaPoster
+            }
+        }
     }
-
-    private fun normalizeSearchText(
-        value: String
-    ): String {
-
-        return value
-            .lowercase()
-            .replace('ı', 'i')
-            .replace('ş', 's')
-            .replace('ğ', 'g')
-            .replace('ü', 'u')
-            .replace('ö', 'o')
-            .replace('ç', 'c')
-            .replace(
-                Regex("""[^a-z0-9]+"""),
-                " "
-            )
-            .trim()
-    }
-
-    private data class SearchSource(
-        val baseUrl: String,
-        val type: TvType
-    )
 
     override suspend fun load(
         url: String
@@ -1091,4 +1029,29 @@ class HdfilmcehennemiProvider : MainAPI() {
 
         return true
     }
+
+    data class Result(
+        @JsonProperty("result")
+        val result:
+            ArrayList<Media>? =
+            arrayListOf()
+    )
+
+    data class Media(
+        @JsonProperty("title")
+        val title:
+            String? = null,
+
+        @JsonProperty("poster")
+        val poster:
+            String? = null,
+
+        @JsonProperty("slug")
+        val slug:
+            String? = null,
+
+        @JsonProperty("slug_prefix")
+        val slugPrefix:
+            String? = null
+    )
 }
