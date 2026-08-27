@@ -42,10 +42,10 @@
     },
     {
         "iconUrl": "https://www.google.com/s2/favicons?domain=dizibox.live&sz=%size%",
-        "fileHash": "sha256-2a5a6e2171edba4d2382327c150d6c31ff35055862a09e0ebaa8d699f64c772d",
+        "fileHash": "sha256-5205dda5600334aa1de435484e07ef8d6fc253789b95d3e5e57216f9f6e355d6",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/mento73/asyaanimeleri-cloudstream",
-        "fileSize": 18494,
+        "fileSize": 20697,
         "status": 1,
         "language": "tr",
         "authors": [
