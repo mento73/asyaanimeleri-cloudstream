@@ -101,10 +101,10 @@
     },
     {
         "iconUrl": "https://www.google.com/s2/favicons?domain=hdfilmcehennemi.nl&sz=%size%",
-        "fileHash": "sha256-f7ad7d7af0baf296a6ff01a494da4c8d6c75e03cac5d1fecb9a218b8d3910742",
+        "fileHash": "sha256-5d5b2e908b17fb0fb7c846b18fe1e2bb4e5446d8dd58c00ec9bfd40415e79dc8",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/mento73/asyaanimeleri-cloudstream",
-        "fileSize": 26167,
+        "fileSize": 25938,
         "status": 1,
         "language": "tr",
         "authors": [
