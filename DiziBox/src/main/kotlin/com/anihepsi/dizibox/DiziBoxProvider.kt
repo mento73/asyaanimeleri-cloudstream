@@ -29,14 +29,19 @@ class DiziBoxProvider : MainAPI() {
     override var name = "DiziBox"
     override var lang = "tr"
 
-    override val hasMainPage = false
+    override val hasMainPage = true
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
 
     override val supportedTypes = setOf(
         TvType.TvSeries
     )
-
+    
+    override val mainPage = mainPageOf(
+    "$mainUrl/diziler/" to "Tüm Diziler"  
+        
+    ) 
+    
     private val headers = mapOf(
         "User-Agent" to
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 " +
