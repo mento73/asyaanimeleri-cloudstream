@@ -1,21 +1,7 @@
 package com.anihepsi.dizibox
 
-import com.lagradost.cloudstream3.Episode
-import com.lagradost.cloudstream3.ExtractorLink
-import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LoadResponse
-import com.lagradost.cloudstream3.MainAPI
-import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.mainPageOf
-import com.lagradost.cloudstream3.newEpisode
-import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.newTvSeriesLoadResponse
-import com.lagradost.cloudstream3.newTvSeriesSearchResponse
-import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -26,23 +12,27 @@ import org.jsoup.nodes.Element
  * keyiflerolsun / Kekik-cloudstream
  * nikyokki / nik-cloudstream
  *
- * Player handling follows publicly exposed player pages / iframe URLs
- * and standard CloudStream extractor APIs.
+ * Player handling here only follows publicly exposed iframe URLs
+ * and CloudStream's standard extractor flow.
  */
 
 class DiziBoxProvider : MainAPI() {
 
     override var mainUrl = "https://www.dizibox.live"
     override var name = "DiziBox"
-    override val supportedTypes = setOf(TvType.TvSeries)
-
     override var lang = "tr"
+
     override val hasMainPage = true
     override val hasQuickSearch = true
 
+    override val supportedTypes = setOf(
+        TvType.TvSeries
+    )
+
     /*
-     * DiziBox mobil/Android User-Agent ile eksik HTML döndürebiliyor.
-     * Bu yüzden masaüstü tarayıcı User-Agent'ını koruyoruz.
+     * ÖNEMLİ:
+     * DiziBox Android/mobile User-Agent ile eksik HTML döndürüyor.
+     * Bu yüzden çalışan desktop UA'yı değiştirmiyoruz.
      */
     private val headers = mapOf(
         "User-Agent" to
@@ -61,13 +51,13 @@ class DiziBoxProvider : MainAPI() {
         "Pragma" to "no-cache"
     )
 
+    // -------------------------------------------------------------------------
+    // ANA SAYFA
+    // -------------------------------------------------------------------------
+
     override val mainPage = mainPageOf(
         "$mainUrl/dizi-arsivi/" to "Tüm Diziler"
     )
-
-    // -------------------------------------------------------------------------
-    // ANA SAYFA / ARŞİV
-    // -------------------------------------------------------------------------
 
     override suspend fun getMainPage(
         page: Int,
@@ -94,7 +84,9 @@ class DiziBoxProvider : MainAPI() {
                 .mapNotNull { article ->
                     article.toSearchResult()
                 }
-                .distinctBy { it.url }
+                .distinctBy {
+                    it.url
+                }
 
         val hasNext =
             document.selectFirst(
@@ -122,12 +114,19 @@ class DiziBoxProvider : MainAPI() {
         query: String
     ): List<SearchResponse> {
 
-        val cleanQuery = query.trim()
+        val cleanQuery =
+            query.trim()
 
         if (cleanQuery.isBlank()) {
             return emptyList()
         }
 
+        /*
+         * Site aramasını kullanmıyoruz.
+         *
+         * DiziBox arşiv sayfasının içinde yaklaşık tüm dizileri
+         * içeren alfabetik liste bulunuyor.
+         */
         val document =
             app.get(
                 "$mainUrl/dizi-arsivi/",
@@ -145,7 +144,9 @@ class DiziBoxProvider : MainAPI() {
             .mapNotNull { link ->
 
                 val href =
-                    fixUrlNull(link.attr("href"))
+                    fixUrlNull(
+                        link.attr("href")
+                    )
                         ?: return@mapNotNull null
 
                 val title =
@@ -175,11 +176,13 @@ class DiziBoxProvider : MainAPI() {
                     TvType.TvSeries
                 )
             }
-            .distinctBy { it.url }
+            .distinctBy {
+                it.url
+            }
     }
 
     // -------------------------------------------------------------------------
-    // DİZİ DETAY / SEZON / BÖLÜMLER
+    // DİZİ DETAY / SEZONLAR / BÖLÜMLER
     // -------------------------------------------------------------------------
 
     override suspend fun load(
@@ -207,10 +210,7 @@ class DiziBoxProvider : MainAPI() {
             mutableListOf<Episode>()
 
         /*
-         * DiziBox sezonları ayrı sayfalarda tutabiliyor.
-         *
-         * Önce sezon bağlantılarını topluyoruz,
-         * ardından her sezonun bölüm listesini okuyoruz.
+         * Sezon sayfalarını bul.
          */
         val seasonLinks =
             document
@@ -232,11 +232,15 @@ class DiziBoxProvider : MainAPI() {
 
                     seasonNumber to seasonUrl
                 }
-                .distinctBy { it.second }
-                .sortedBy { it.first }
+                .distinctBy {
+                    it.second
+                }
+                .sortedBy {
+                    it.first
+                }
 
         /*
-         * Ana dizi sayfasında zaten bölüm varsa onu da al.
+         * Ana sayfanın içinde bölüm varsa önce onu al.
          */
         collectEpisodesFromSeasonDocument(
             document = document,
@@ -248,12 +252,9 @@ class DiziBoxProvider : MainAPI() {
         )
 
         /*
-         * Sezon sayfalarını sırayla oku.
+         * Her sezon sayfasını oku.
          */
-        for (
-            (seasonNumber, seasonUrl)
-            in seasonLinks
-        ) {
+        for ((seasonNumber, seasonUrl) in seasonLinks) {
 
             try {
 
@@ -271,17 +272,12 @@ class DiziBoxProvider : MainAPI() {
                 )
 
             } catch (_: Exception) {
-                /*
-                 * Bir sezon okunamazsa diğer sezonlara
-                 * devam edelim.
-                 */
+                // Bir sezon hata verirse diğerleri devam etsin.
             }
         }
 
         /*
-         * Bazı dizilerde #seasons-list bulunmayabilir.
-         * Böyle durumda mevcut sayfadaki sezon numarasını
-         * URL veya başlıktan tahmin edip bölümleri alıyoruz.
+         * Sezon listesi olmayan sayfalar için fallback.
          */
         if (
             seasonLinks.isEmpty() &&
@@ -303,7 +299,9 @@ class DiziBoxProvider : MainAPI() {
 
         val finalEpisodes =
             episodes
-                .distinctBy { it.data }
+                .distinctBy {
+                    it.data
+                }
                 .sortedWith(
                     compareBy<Episode>(
                         { it.season ?: 0 },
@@ -337,7 +335,7 @@ class DiziBoxProvider : MainAPI() {
             data.trimEnd('/')
 
         /*
-         * Önce ana bölüm sayfasını açıyoruz.
+         * Ana bölüm sayfası.
          */
         val mainDocument =
             try {
@@ -353,13 +351,13 @@ class DiziBoxProvider : MainAPI() {
             }
 
         /*
-         * DiziBox'ta genel olarak:
+         * DiziBox player yolları:
          *
-         * ana sayfa = DBX Pro
+         * ana bölüm = DBX Pro
          * /2/       = Moly+
          * /3/       = Odnok
          *
-         * Bunları kaldırmıyoruz.
+         * Moly'yi kaldırmıyoruz.
          */
         val playerPages =
             mutableListOf(
@@ -369,8 +367,7 @@ class DiziBoxProvider : MainAPI() {
             )
 
         /*
-         * Player seçim menüsünden de varsa
-         * gerçek bağlantıları topla.
+         * Player seçim menüsündeki gerçek URL'leri de ekle.
          */
         mainDocument
             ?.select(
@@ -388,11 +385,8 @@ class DiziBoxProvider : MainAPI() {
                 if (candidate.isNotBlank()) {
 
                     fixUrlNull(candidate)
-                        ?.let { fixedUrl ->
-
-                            playerPages.add(
-                                fixedUrl
-                            )
+                        ?.let { url ->
+                            playerPages.add(url)
                         }
                 }
             }
@@ -401,7 +395,7 @@ class DiziBoxProvider : MainAPI() {
             playerPages.distinct()
 
         /*
-         * Her player sayfasını sırayla kontrol et.
+         * DBX Pro / Moly+ / Odnok sayfalarını sırayla kontrol et.
          */
         for (playerPage in uniquePlayerPages) {
 
@@ -432,16 +426,9 @@ class DiziBoxProvider : MainAPI() {
                     )
 
                     // ---------------------------------------------------------
-                    // DBX PRO / KING.PHP DEBUG TESTİ
+                    // DBX PRO / KING.PHP TANILAMA TESTİ
                     // ---------------------------------------------------------
 
-                    /*
-                     * Burada stream çıkarmıyoruz.
-                     *
-                     * Sadece king.php iframe'i doğru
-                     * Referer ile normal HTTP isteği
-                     * aldığında ne döndürüyor ona bakıyoruz.
-                     */
                     if (
                         iframeUrl.contains(
                             "/player/king/king.php"
@@ -450,6 +437,13 @@ class DiziBoxProvider : MainAPI() {
 
                         try {
 
+                            /*
+                             * Burada stream çözmüyoruz.
+                             *
+                             * Sadece iframe'i, geldiği bölüm sayfasını
+                             * Referer olarak verip normal HTTP isteğiyle
+                             * çağırıyoruz.
+                             */
                             val kingResponse =
                                 app.get(
                                     iframeUrl,
@@ -457,14 +451,17 @@ class DiziBoxProvider : MainAPI() {
                                     referer = playerPage
                                 )
 
+                            val kingDocument =
+                                kingResponse.document
+
                             println(
                                 "DIZIBOX DEBUG king finalUrl = " +
-                                    kingResponse.url
+                                    kingDocument.location()
                             )
 
                             println(
                                 "DIZIBOX DEBUG king title = " +
-                                    kingResponse.document.title()
+                                    kingDocument.title()
                             )
 
                             println(
@@ -473,10 +470,13 @@ class DiziBoxProvider : MainAPI() {
                             )
 
                             val kingIframes =
-                                kingResponse
-                                    .document
-                                    .select("iframe[src]")
-                                    .joinToString(" | ") {
+                                kingDocument
+                                    .select(
+                                        "iframe[src]"
+                                    )
+                                    .joinToString(
+                                        " | "
+                                    ) {
                                         it.attr("src")
                                     }
 
@@ -498,10 +498,6 @@ class DiziBoxProvider : MainAPI() {
                     // STANDART CLOUDSTREAM EXTRACTOR
                     // ---------------------------------------------------------
 
-                    /*
-                     * Public iframe URL'lerini CloudStream'ın
-                     * mevcut extractor sistemine veriyoruz.
-                     */
                     try {
 
                         loadExtractor(
@@ -523,7 +519,7 @@ class DiziBoxProvider : MainAPI() {
     }
 
     // -------------------------------------------------------------------------
-    // YARDIMCI FONKSİYONLAR
+    // SEARCH RESULT HELPER
     // -------------------------------------------------------------------------
 
     private fun Element.toSearchResult():
@@ -533,8 +529,12 @@ class DiziBoxProvider : MainAPI() {
             selectFirst(
                 ".detailed-article-container h3 a[href]"
             )
-                ?: selectFirst("h3 a[href]")
-                ?: selectFirst("figure a[href]")
+                ?: selectFirst(
+                    "h3 a[href]"
+                )
+                ?: selectFirst(
+                    "figure a[href]"
+                )
                 ?: return null
 
         val href =
@@ -543,7 +543,11 @@ class DiziBoxProvider : MainAPI() {
             )
                 ?: return null
 
-        if (!href.contains("/diziler/")) {
+        if (
+            !href.contains(
+                "/diziler/"
+            )
+        ) {
             return null
         }
 
@@ -581,6 +585,10 @@ class DiziBoxProvider : MainAPI() {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // IMAGE
+    // -------------------------------------------------------------------------
+
     private fun getImageUrl(
         image: Element
     ): String? {
@@ -601,7 +609,7 @@ class DiziBoxProvider : MainAPI() {
                 value.isBlank() ||
                 value.startsWith(
                     "data:image",
-                    ignoreCase = true
+                    true
                 )
             ) {
                 continue
@@ -612,6 +620,10 @@ class DiziBoxProvider : MainAPI() {
 
         return null
     }
+
+    // -------------------------------------------------------------------------
+    // TITLE
+    // -------------------------------------------------------------------------
 
     private fun getSeriesTitle(
         document: Document
@@ -624,7 +636,9 @@ class DiziBoxProvider : MainAPI() {
                 )
                 ?.attr("content")
                 ?.trim()
-                ?.removeSuffix(" - DiziBOX")
+                ?.removeSuffix(
+                    " - DiziBOX"
+                )
                 ?.trim()
 
         if (!ogTitle.isNullOrBlank()) {
@@ -655,6 +669,10 @@ class DiziBoxProvider : MainAPI() {
         return null
     }
 
+    // -------------------------------------------------------------------------
+    // POSTER
+    // -------------------------------------------------------------------------
+
     private fun getSeriesPoster(
         document: Document
     ): String? {
@@ -668,7 +686,9 @@ class DiziBoxProvider : MainAPI() {
                 ?.trim()
 
         if (!ogImage.isNullOrBlank()) {
-            return fixUrlNull(ogImage)
+            return fixUrlNull(
+                ogImage
+            )
         }
 
         val image =
@@ -681,6 +701,10 @@ class DiziBoxProvider : MainAPI() {
 
         return getImageUrl(image)
     }
+
+    // -------------------------------------------------------------------------
+    // AÇIKLAMA
+    // -------------------------------------------------------------------------
 
     private fun getSeriesPlot(
         document: Document
@@ -711,16 +735,15 @@ class DiziBoxProvider : MainAPI() {
         return null
     }
 
+    // -------------------------------------------------------------------------
+    // SEZON NUMARASI
+    // -------------------------------------------------------------------------
+
     private fun extractSeasonNumber(
         text: String?,
         url: String?
     ): Int? {
 
-        /*
-         * Örnek:
-         * 1. Sezon
-         * 2.Season değil, Türkçe site formatı.
-         */
         val textMatch =
             Regex(
                 """(\d+)\s*\.\s*Sezon""",
@@ -738,10 +761,6 @@ class DiziBoxProvider : MainAPI() {
                 return it
             }
 
-        /*
-         * URL örneği:
-         * /1-sezon-...
-         */
         val urlMatch =
             Regex(
                 """/(\d+)-sezon-""",
@@ -756,6 +775,10 @@ class DiziBoxProvider : MainAPI() {
             ?.getOrNull(1)
             ?.toIntOrNull()
     }
+
+    // -------------------------------------------------------------------------
+    // BÖLÜMLER
+    // -------------------------------------------------------------------------
 
     private fun collectEpisodesFromSeasonDocument(
         document: Document,
@@ -772,21 +795,24 @@ class DiziBoxProvider : MainAPI() {
 
             val episodeUrl =
                 fixUrlNull(
-                    episodeElement.attr("href")
+                    episodeElement.attr(
+                        "href"
+                    )
                 )
                     ?: continue
 
             /*
              * Örnek:
-             *
-             * /the-ghost-in-the-shell-1-sezon-8-bolum-izle/
+             * the-ghost-in-the-shell-1-sezon-8-bolum-izle
              */
             val match =
                 Regex(
                     """-(\d+)-sezon-(\d+)-bolum(?:-|/|$)""",
                     RegexOption.IGNORE_CASE
                 )
-                    .find(episodeUrl)
+                    .find(
+                        episodeUrl
+                    )
 
             val seasonNumber =
                 match
@@ -801,10 +827,6 @@ class DiziBoxProvider : MainAPI() {
                     ?.getOrNull(2)
                     ?.toIntOrNull()
 
-            /*
-             * URL regex ile bölüm numarası bulunamazsa
-             * görünen yazıdan da deneyelim.
-             */
             val textEpisodeNumber =
                 Regex(
                     """(\d+)\s*\.\s*Bölüm""",
@@ -832,10 +854,12 @@ class DiziBoxProvider : MainAPI() {
                     }
 
                     finalEpisodeNumber != null -> {
+
                         "$finalEpisodeNumber. Bölüm"
                     }
 
                     else -> {
+
                         episodeElement
                             .text()
                             .trim()
@@ -846,10 +870,17 @@ class DiziBoxProvider : MainAPI() {
                 }
 
             episodes.add(
-                newEpisode(episodeUrl) {
-                    name = episodeName
-                    season = seasonNumber
-                    episode = finalEpisodeNumber
+                newEpisode(
+                    episodeUrl
+                ) {
+                    this.name =
+                        episodeName
+
+                    this.season =
+                        seasonNumber
+
+                    this.episode =
+                        finalEpisodeNumber
                 }
             )
         }
