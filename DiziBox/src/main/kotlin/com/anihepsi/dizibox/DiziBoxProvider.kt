@@ -80,11 +80,20 @@ class DiziBoxProvider : MainAPI() {
                 "${request.data.trimEnd('/')}/page/$page/"
             }
 
-        val document = app.get(
-            url,
-            headers = headers,
-            referer = "$mainUrl/"
-        ).document
+        val response = app.get(
+    url,
+    headers = headers,
+    referer = "$mainUrl/"
+)
+
+println("DBX MAIN CODE = ${response.code}")
+println("DBX MAIN URL = ${response.url}")
+println("DBX MAIN LENGTH = ${response.text.length}")
+println("DBX MAIN TITLE = ${response.document.title()}")
+println("DBX MAIN CARDS = ${response.document.select(".col-1 article.detailed-article").size}")
+println("DBX MAIN ARCHIVE LINKS = ${response.document.select("ul.alphabetical-category-list a[href*=\"/diziler/\"]").size}")
+
+val document = response.document
 
         /*
          * DiziBox arşivindeki gerçek kart yapısı:
@@ -157,12 +166,20 @@ class DiziBoxProvider : MainAPI() {
             return emptyList()
         }
 
-        val document =
-            app.get(
-                "$mainUrl/dizi-arsivi/",
-                headers = headers,
-                referer = "$mainUrl/"
-            ).document
+        val response =
+    app.get(
+        "$mainUrl/dizi-arsivi/",
+        headers = headers,
+        referer = "$mainUrl/"
+    )
+
+println("DBX SEARCH CODE = ${response.code}")
+println("DBX SEARCH URL = ${response.url}")
+println("DBX SEARCH LENGTH = ${response.text.length}")
+println("DBX SEARCH TITLE = ${response.document.title()}")
+println("DBX SEARCH ARCHIVE LINKS = ${response.document.select("ul.alphabetical-category-list a[href*=\"/diziler/\"]").size}")
+
+val document = response.document
 
         val normalizedQuery =
             cleanQuery.lowercase()
