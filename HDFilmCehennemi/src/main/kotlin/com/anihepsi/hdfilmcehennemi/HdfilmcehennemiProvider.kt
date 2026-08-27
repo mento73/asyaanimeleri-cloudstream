@@ -14,9 +14,6 @@ import java.net.URLEncoder
  * Original Hdfilmcehennemi implementation:
  * Hexated / cloudstream-extensions-multilingual
  *
- * Search flow adapted with reference to:
- * enXov / hdfilmcehennemi-stremio
- *
  * Adapted for the Anihepsi CloudStream repository.
  */
 
@@ -429,22 +426,14 @@ class HdfilmcehennemiProvider : MainAPI() {
      * SEARCH
      *
      * Güncel HDFilmCehennemi araması:
-     *
      * GET /search/?q=QUERY
      *
-     * Response:
-     * {
-     *   "results": [
-     *      "<html>...</html>",
-     *      "<html>...</html>"
-     *   ]
-     * }
+     * Sunucu JSON içinde HTML kart parçaları döndürüyor.
      */
 
     override suspend fun quickSearch(
         query: String
     ): List<SearchResponse> {
-
         return search(query)
     }
 
@@ -812,10 +801,17 @@ class HdfilmcehennemiProvider : MainAPI() {
                 }
             ) {
 
-                posterUrl = poster
-                this.year = year
-                plot = description
-                this.tags = tags
+                posterUrl =
+                    poster
+
+                this.year =
+                    year
+
+                plot =
+                    description
+
+                this.tags =
+                    tags
 
                 addActors(
                     actors
@@ -834,10 +830,17 @@ class HdfilmcehennemiProvider : MainAPI() {
             url
         ) {
 
-            posterUrl = poster
-            this.year = year
-            plot = description
-            this.tags = tags
+            posterUrl =
+                poster
+
+            this.year =
+                year
+
+            plot =
+                description
+
+            this.tags =
+                tags
 
             addActors(
                 actors
@@ -845,9 +848,224 @@ class HdfilmcehennemiProvider : MainAPI() {
         }
     }
 
+    /*
+     * PLAYER
+     *
+     * Bu bölüm yalnızca sayfada açıkça bulunan iframe / Rapidrame
+     * bağlantılarını ve normal CloudStream extractor akışını kullanır.
+     * Şifre çözme, token üretme veya erişim kontrolü aşma yoktur.
+     */
+
+    private fun cleanPlayerUrl(
+        raw: String
+    ): String? {
+
+        val cleaned =
+            raw
+                .trim()
+                .trim('"', '\'', ' ')
+                .replace("\\/", "/")
+                .replace("&amp;", "&")
+                .replace("\\u0026", "&")
+
+        if (
+            cleaned.isBlank() ||
+            cleaned == "#" ||
+            cleaned.startsWith("javascript:", true)
+        ) {
+            return null
+        }
+
+        return fixUrlNull(cleaned)
+    }
+
+    private fun Element.playerAttributeUrls():
+        List<String> {
+
+        val attributes =
+            listOf(
+                "href",
+                "src",
+                "data-src",
+                "data-url",
+                "data-href",
+                "data-link",
+                "data-player",
+                "data-iframe"
+            )
+
+        val urls =
+            mutableListOf<String>()
+
+        for (attribute in attributes) {
+
+            val value =
+                attr(attribute)
+                    .trim()
+
+            if (value.isBlank()) {
+                continue
+            }
+
+            cleanPlayerUrl(value)
+                ?.let {
+                    urls.add(it)
+                }
+        }
+
+        /*
+         * Bazı player düğmeleri URL'yi onclick içine koyabiliyor.
+         * Yalnızca açıkça yazılmış http(s) / protokol-relative URL'leri alıyoruz.
+         */
+        val onclick =
+            attr("onclick")
+
+        Regex(
+            """(?i)(https?:)?//[^\s"'<>\\]+"""
+        )
+            .findAll(onclick)
+            .mapNotNull {
+                cleanPlayerUrl(
+                    it.value
+                )
+            }
+            .forEach {
+                urls.add(it)
+            }
+
+        return urls.distinct()
+    }
+
+    private fun collectPlayerCandidates(
+        document: org.jsoup.nodes.Document
+    ): List<Pair<String, String>> {
+
+        val candidates =
+            mutableListOf<Pair<String, String>>()
+
+        /*
+         * Önce doğrudan iframe'ler.
+         */
+        document
+            .select(
+                "iframe[src], iframe[data-src]"
+            )
+            .forEach { iframe ->
+
+                iframe
+                    .playerAttributeUrls()
+                    .forEach { url ->
+
+                        candidates.add(
+                            "HDFilmCehennemi" to url
+                        )
+                    }
+            }
+
+        /*
+         * Rapidrame yazan düğme/anchor ve player veri attribute'ları.
+         * Sayfada görünür "Rapidrame" butonunu özellikle hedefliyoruz.
+         */
+        document
+            .select(
+                """
+                a[href],
+                button,
+                [data-player],
+                [data-src],
+                [data-url],
+                [data-href],
+                [data-link],
+                [data-iframe]
+                """.trimIndent()
+            )
+            .forEach { element ->
+
+                val text =
+                    element
+                        .text()
+                        .trim()
+
+                val attrs =
+                    listOf(
+                        element.attr("href"),
+                        element.attr("src"),
+                        element.attr("data-src"),
+                        element.attr("data-url"),
+                        element.attr("data-href"),
+                        element.attr("data-link"),
+                        element.attr("data-player"),
+                        element.attr("data-iframe"),
+                        element.attr("onclick")
+                    )
+                        .joinToString(" ")
+
+                val looksLikePlayer =
+                    text.contains(
+                        "rapidrame",
+                        ignoreCase = true
+                    ) ||
+                        attrs.contains(
+                            "rapidrame",
+                            ignoreCase = true
+                        ) ||
+                        element.hasAttr("data-player") ||
+                        element.hasAttr("data-iframe")
+
+                if (!looksLikePlayer) {
+                    return@forEach
+                }
+
+                val sourceName =
+                    text
+                        .takeIf {
+                            it.isNotBlank()
+                        }
+                        ?: "Rapidrame"
+
+                element
+                    .playerAttributeUrls()
+                    .forEach { url ->
+
+                        candidates.add(
+                            sourceName to url
+                        )
+                    }
+            }
+
+        /*
+         * Açık HTML/script içinde doğrudan Rapidrame URL'si varsa onu da al.
+         * Burada herhangi bir şifre çözme yapılmıyor; yalnızca düz metin URL.
+         */
+        val html =
+            document.html()
+
+        Regex(
+            """(?i)(https?:)?//[^"'<>\\\s]*rapidrame[^"'<>\\\s]*"""
+        )
+            .findAll(html)
+            .mapNotNull {
+                cleanPlayerUrl(
+                    it.value
+                )
+            }
+            .forEach { url ->
+
+                candidates.add(
+                    "Rapidrame" to url
+                )
+            }
+
+        return candidates
+            .distinctBy {
+                it.second
+            }
+    }
+
     private suspend fun invokeLocalSource(
         source: String,
         url: String,
+        referer: String,
         sourceCallback:
             (ExtractorLink) -> Unit
     ): Boolean {
@@ -860,7 +1078,7 @@ class HdfilmcehennemiProvider : MainAPI() {
             app.get(
                 url,
                 headers = browserHeaders,
-                referer = "$mainUrl/"
+                referer = referer
             )
 
         val scriptText =
@@ -889,38 +1107,122 @@ class HdfilmcehennemiProvider : MainAPI() {
                 )
             )
 
-        var m3uLink:
-            String? = null
+        var found =
+            false
 
         for (pattern in patterns) {
 
-            val match =
-                pattern
-                    .find(scriptText)
-                    ?.groupValues
-                    ?.getOrNull(1)
+            pattern
+                .findAll(scriptText)
+                .mapNotNull {
+                    it.groupValues
+                        .getOrNull(1)
+                        ?.replace("\\/", "/")
+                        ?.replace("&amp;", "&")
+                        ?.takeIf { link ->
+                            link.isNotBlank()
+                        }
+                }
+                .distinct()
+                .forEach { m3uLink ->
 
-            if (!match.isNullOrBlank()) {
-                m3uLink = match
-                break
+                    M3u8Helper
+                        .generateM3u8(
+                            source,
+                            m3uLink,
+                            url
+                        )
+                        .forEach {
+                            sourceCallback(it)
+                            found = true
+                        }
+                }
+        }
+
+        return found
+    }
+
+    private suspend fun tryPlayerUrl(
+        sourceName: String,
+        sourceUrl: String,
+        referer: String,
+        subtitleCallback:
+            (SubtitleFile) -> Unit,
+        callback:
+            (ExtractorLink) -> Unit
+    ) {
+
+        /*
+         * 1) CloudStream'in standart extractor sistemi.
+         */
+        safeApiCall {
+            loadExtractor(
+                sourceUrl,
+                referer,
+                subtitleCallback,
+                callback
+            )
+        }
+
+        /*
+         * 2) Sayfa düz m3u8 içeriyorsa normal parser.
+         */
+        safeApiCall {
+            invokeLocalSource(
+                sourceName,
+                sourceUrl,
+                referer,
+                callback
+            )
+        }
+
+        /*
+         * 3) Kaynak sayfasının içinde açık iframe varsa bir seviye daha izle.
+         */
+        safeApiCall {
+
+            val sourceDocument =
+                app.get(
+                    sourceUrl,
+                    headers = browserHeaders,
+                    referer = referer
+                ).document
+
+            val nestedCandidates =
+                collectPlayerCandidates(
+                    sourceDocument
+                )
+
+            for (
+                (nestedName, nestedUrl)
+                in nestedCandidates
+            ) {
+
+                if (nestedUrl == sourceUrl) {
+                    continue
+                }
+
+                safeApiCall {
+                    loadExtractor(
+                        nestedUrl,
+                        sourceUrl,
+                        subtitleCallback,
+                        callback
+                    )
+                }
+
+                safeApiCall {
+                    invokeLocalSource(
+                        nestedName.ifBlank {
+                            sourceName
+                        },
+                        nestedUrl,
+                        sourceUrl,
+                        callback
+                    )
+                }
             }
         }
-
-        if (m3uLink.isNullOrBlank()) {
-            return false
-        }
-
-        M3u8Helper
-            .generateM3u8(
-                source,
-                m3uLink,
-                url
-            )
-            .forEach(
-                sourceCallback
-            )
-
-        return true
     }
 
     override suspend fun loadLinks(
@@ -940,67 +1242,37 @@ class HdfilmcehennemiProvider : MainAPI() {
             ).document
 
         val candidates =
-            mutableListOf<Pair<String, String>>()
+            collectPlayerCandidates(
+                document
+            )
+                .toMutableList()
 
+        /*
+         * Eski HDFilmCehennemi yapısındaki kaynak sekmelerini de koruyoruz.
+         * Bunlar Rapidrame URL'sine giden normal bir ara sayfa olabilir.
+         */
         document
             .select(
-                """
-                nav.nav.card-nav.nav-slider a[href],
-                a[data-player],
-                a[data-src],
-                iframe[src],
-                iframe[data-src],
-                .card-video iframe
-                """.trimIndent()
+                "nav.nav.card-nav.nav-slider a[href]"
             )
             .forEach { element ->
-
-                val raw =
-                    when {
-
-                        element
-                            .tagName()
-                            .equals(
-                                "iframe",
-                                ignoreCase = true
-                            ) ->
-
-                            element
-                                .attr("data-src")
-                                .ifBlank {
-                                    element.attr("src")
-                                }
-
-                        element.hasAttr("data-player") ->
-                            element.attr("data-player")
-
-                        element.hasAttr("data-src") ->
-                            element.attr("data-src")
-
-                        else ->
-                            element.attr("href")
-                    }
-                        .trim()
-
-                if (raw.isBlank()) {
-                    return@forEach
-                }
-
-                val fixed =
-                    fixUrlNull(raw)
-                        ?: return@forEach
 
                 val sourceName =
                     element
                         .text()
                         .trim()
                         .ifBlank {
-                            name
+                            "HDFilmCehennemi"
                         }
 
-                candidates.add(
-                    sourceName to fixed
-                )
+                element
+                    .playerAttributeUrls()
+                    .forEach { url ->
+
+                        candidates.add(
+                            sourceName to url
+                        )
+                    }
             }
 
         for (
@@ -1010,64 +1282,13 @@ class HdfilmcehennemiProvider : MainAPI() {
             }
         ) {
 
-            safeApiCall {
-
-                loadExtractor(
-                    sourceUrl,
-                    data,
-                    subtitleCallback,
-                    callback
-                )
-
-                val sourcePage =
-                    app.get(
-                        sourceUrl,
-                        headers = browserHeaders,
-                        referer = data
-                    ).document
-
-                val iframe =
-                    sourcePage
-                        .selectFirst(
-                            "iframe[data-src], iframe[src]"
-                        )
-
-                val iframeUrl =
-                    iframe
-                        ?.attr("data-src")
-                        ?.ifBlank {
-                            iframe.attr("src")
-                        }
-                        ?.trim()
-                        ?.takeIf {
-                            it.isNotBlank()
-                        }
-                        ?.let {
-                            fixUrlNull(it)
-                        }
-
-                if (iframeUrl != null) {
-
-                    loadExtractor(
-                        iframeUrl,
-                        sourceUrl,
-                        subtitleCallback,
-                        callback
-                    )
-
-                    invokeLocalSource(
-                        sourceName,
-                        iframeUrl,
-                        callback
-                    )
-                }
-
-                invokeLocalSource(
-                    sourceName,
-                    sourceUrl,
-                    callback
-                )
-            }
+            tryPlayerUrl(
+                sourceName,
+                sourceUrl,
+                data,
+                subtitleCallback,
+                callback
+            )
         }
 
         return true
