@@ -1,12 +1,8 @@
 package com.anihepsi.dizibox
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.net.URLDecoder
-import java.util.Base64
 
 /*
  * DiziBox provider adapted for the Anihepsi CloudStream repository.
@@ -15,11 +11,14 @@ import java.util.Base64
  * keyiflerolsun / Kekik-cloudstream
  * nikyokki / nik-cloudstream
  *
- * This implementation only uses:
- * - public HTML
- * - openly exposed iframe URLs
- * - standard Base64 decoding
- * - CloudStream's standard extractor system
+ * This provider handles publicly visible catalogue metadata only:
+ * - series archive
+ * - search
+ * - series metadata
+ * - seasons
+ * - episode listings
+ *
+ * Player/media extraction is intentionally not implemented here.
  */
 
 class DiziBoxProvider : MainAPI() {
@@ -30,24 +29,22 @@ class DiziBoxProvider : MainAPI() {
 
     override val hasMainPage = true
     override val hasQuickSearch = true
-    override val hasDownloadSupport = true
+    override val hasDownloadSupport = false
 
     override val supportedTypes = setOf(
         TvType.TvSeries
     )
 
     /*
-     * Tek ana dizin.
-     * A-B-C gibi ayrı CloudStream dizinleri yok.
+     * Tek CloudStream dizini.
      */
     override val mainPage = mainPageOf(
         "$mainUrl/dizi-arsivi/" to "Tüm Diziler"
     )
 
     /*
-     * ÖNEMLİ:
-     * DiziBox mobil User-Agent ile eksik HTML döndürüyor.
-     * Masaüstü User-Agent kullanılması gerekiyor.
+     * DiziBox mobil User-Agent ile eksik HTML döndürdüğü için
+     * masaüstü User-Agent kullanıyoruz.
      */
     private val headers = mapOf(
         "User-Agent" to
@@ -68,16 +65,10 @@ class DiziBoxProvider : MainAPI() {
 
     /*
      * ============================================================
-     * ANA SAYFA / TÜM DİZİLER
+     * ANA SAYFA
      * ============================================================
-     *
-     * Gerçek arşiv:
-     *
-     * /dizi-arsivi/
-     * /dizi-arsivi/page/2/
-     * /dizi-arsivi/page/3/
-     * ...
      */
+
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -106,10 +97,6 @@ class DiziBoxProvider : MainAPI() {
                     it.url
                 }
 
-        /*
-         * Gerçek sonraki sayfa bağlantısı varsa
-         * CloudStream devamını yükleyebilir.
-         */
         val hasNext =
             document.selectFirst(
                 ".woca-pagination a[href*=\"/page/${page + 1}/\"]"
@@ -127,14 +114,13 @@ class DiziBoxProvider : MainAPI() {
      * ARAMA
      * ============================================================
      *
-     * Arama için doğrudan DiziBox'ın gerçek arama sayfasını
-     * kullanıyoruz.
+     * DiziBox'ın kendi ?s= araması CloudStream tarafında
+     * tutarlı sonuç vermediği için alfabetik arşivi kullanıyoruz.
      *
-     * Gerçek sonuç yapısı:
-     *
-     * section#search
-     *   article.detailed-article
+     * CloudStream ile testte bu sayfadan 4711 dizi bağlantısı
+     * okunabildi.
      */
+
     override suspend fun quickSearch(
         query: String
     ): List<SearchResponse> {
@@ -142,76 +128,77 @@ class DiziBoxProvider : MainAPI() {
     }
 
     override suspend fun search(
-    query: String
-): List<SearchResponse> {
+        query: String
+    ): List<SearchResponse> {
 
-    val cleanQuery = query.trim()
+        val cleanQuery = query.trim()
 
-    if (cleanQuery.isBlank()) {
-        return emptyList()
-    }
+        if (cleanQuery.isBlank()) {
+            return emptyList()
+        }
 
-    val document =
-        app.get(
-            "$mainUrl/dizi-arsivi/",
-            headers = headers,
-            referer = "$mainUrl/"
-        ).document
+        val document =
+            app.get(
+                "$mainUrl/dizi-arsivi/",
+                headers = headers,
+                referer = "$mainUrl/"
+            ).document
 
-    val normalizedQuery =
-        cleanQuery.lowercase()
+        val normalizedQuery =
+            cleanQuery.lowercase()
 
-    return document
-        .select(
-            "ul.alphabetical-category-list a[href*=\"/diziler/\"]"
-        )
-        .mapNotNull { link ->
-
-            val href =
-                fixUrlNull(
-                    link.attr("href")
-                )
-                    ?: return@mapNotNull null
-
-            val title =
-                link
-                    .text()
-                    .trim()
-                    .ifBlank {
-                        link
-                            .attr("title")
-                            .removeSuffix(" izle")
-                            .trim()
-                    }
-
-            if (title.isBlank()) {
-                return@mapNotNull null
-            }
-
-            if (
-                !title
-                    .lowercase()
-                    .contains(normalizedQuery)
-            ) {
-                return@mapNotNull null
-            }
-
-            newTvSeriesSearchResponse(
-                title,
-                href,
-                TvType.TvSeries
+        return document
+            .select(
+                "ul.alphabetical-category-list a[href*=\"/diziler/\"]"
             )
-        }
-        .distinctBy {
-            it.url
-        }
-}
+            .mapNotNull { link ->
+
+                val href =
+                    fixUrlNull(
+                        link.attr("href")
+                    )
+                        ?: return@mapNotNull null
+
+                val title =
+                    link
+                        .text()
+                        .trim()
+                        .ifBlank {
+                            link
+                                .attr("title")
+                                .removeSuffix(" izle")
+                                .trim()
+                        }
+
+                if (title.isBlank()) {
+                    return@mapNotNull null
+                }
+
+                if (
+                    !title
+                        .lowercase()
+                        .contains(normalizedQuery)
+                ) {
+                    return@mapNotNull null
+                }
+
+                newTvSeriesSearchResponse(
+                    title,
+                    href,
+                    TvType.TvSeries
+                )
+            }
+            .distinctBy {
+                it.url
+            }
+    }
 
     /*
      * ============================================================
-     * DİZİ KARTI
+     * ARŞİV KARTI
      * ============================================================
      */
+
     private fun Element.toSearchResult(): SearchResponse? {
 
         val link =
@@ -268,9 +255,10 @@ class DiziBoxProvider : MainAPI() {
 
     /*
      * ============================================================
-     * RESİM
+     * RESİMLER
      * ============================================================
      */
+
     private fun getImageUrl(
         image: Element
     ): String? {
@@ -283,8 +271,7 @@ class DiziBoxProvider : MainAPI() {
 
         for (candidate in candidates) {
 
-            val value =
-                candidate.trim()
+            val value = candidate.trim()
 
             if (
                 value.isBlank() ||
@@ -307,6 +294,7 @@ class DiziBoxProvider : MainAPI() {
      * DİZİ DETAY
      * ============================================================
      */
+
     override suspend fun load(
         url: String
     ): LoadResponse? {
@@ -332,9 +320,7 @@ class DiziBoxProvider : MainAPI() {
             mutableListOf<Episode>()
 
         /*
-         * Gerçek sezon yapısı:
-         *
-         * #seasons-list a
+         * Sezon bağlantıları.
          */
         val seasonLinks =
             document
@@ -363,51 +349,60 @@ class DiziBoxProvider : MainAPI() {
                     it.first
                 }
 
-        if (seasonLinks.isNotEmpty()) {
+        /*
+         * Ana sayfanın içinde bölüm varsa önce onları al.
+         */
+        collectEpisodesFromSeasonDocument(
+            document = document,
+            defaultSeason =
+                seasonLinks.firstOrNull()?.first,
+            episodes = episodes
+        )
 
-            /*
-             * Ana dizi sayfasında bazen ilk sezonun bölümleri
-             * doğrudan bulunuyor.
-             */
-            collectEpisodesFromSeasonDocument(
-                document = document,
-                defaultSeason =
-                    seasonLinks.firstOrNull()?.first,
-                episodes = episodes
-            )
+        /*
+         * Sezon sayfalarını tara.
+         *
+         * Not:
+         * DiziBox'ın yapısı gereği bazı dizilerde bölümlerin tamamı
+         * ancak sezon sayfaları açıldığında geliyor.
+         */
+        for (
+            (seasonNumber, seasonUrl)
+            in seasonLinks
+        ) {
 
-            /*
-             * Bütün sezonları sırayla tara.
-             */
-            for (
-                (seasonNumber, seasonUrl)
-                in seasonLinks
-            ) {
+            try {
 
-                try {
+                val seasonDocument =
+                    app.get(
+                        seasonUrl,
+                        headers = headers,
+                        referer = url
+                    ).document
 
-                    val seasonDocument =
-                        app.get(
-                            seasonUrl,
-                            headers = headers,
-                            referer = url
-                        ).document
+                collectEpisodesFromSeasonDocument(
+                    document = seasonDocument,
+                    defaultSeason = seasonNumber,
+                    episodes = episodes
+                )
 
-                    collectEpisodesFromSeasonDocument(
-                        document = seasonDocument,
-                        defaultSeason = seasonNumber,
-                        episodes = episodes
-                    )
-
-                } catch (_: Exception) {
-                }
+            } catch (_: Exception) {
+                /*
+                 * Tek bir sezon hata verirse diğer sezonları
+                 * göstermeye devam et.
+                 */
             }
+        }
 
-        } else {
+        /*
+         * Eğer sezon bağlantısı yoksa mevcut sayfadan
+         * sezon numarası çıkarmayı dene.
+         */
+        if (
+            seasonLinks.isEmpty() &&
+            episodes.isEmpty()
+        ) {
 
-            /*
-             * Direkt sezon sayfası açılmışsa fallback.
-             */
             val seasonNumber =
                 extractSeasonNumber(
                     document.title(),
@@ -450,9 +445,10 @@ class DiziBoxProvider : MainAPI() {
 
     /*
      * ============================================================
-     * BAŞLIK
+     * DİZİ BAŞLIĞI
      * ============================================================
      */
+
     private fun getSeriesTitle(
         document: Document
     ): String? {
@@ -489,6 +485,7 @@ class DiziBoxProvider : MainAPI() {
      * POSTER
      * ============================================================
      */
+
     private fun getSeriesPoster(
         document: Document
     ): String? {
@@ -527,6 +524,7 @@ class DiziBoxProvider : MainAPI() {
      * AÇIKLAMA
      * ============================================================
      */
+
     private fun getSeriesPlot(
         document: Document
     ): String? {
@@ -570,6 +568,7 @@ class DiziBoxProvider : MainAPI() {
      * SEZON NUMARASI
      * ============================================================
      */
+
     private fun extractSeasonNumber(
         text: String?,
         url: String
@@ -608,6 +607,7 @@ class DiziBoxProvider : MainAPI() {
      * BÖLÜMLER
      * ============================================================
      */
+
     private fun collectEpisodesFromSeasonDocument(
         document: Document,
         defaultSeason: Int?,
@@ -664,8 +664,11 @@ class DiziBoxProvider : MainAPI() {
                     seasonNumber != null &&
                     episodeNumber != null
                 ) {
+
                     "$seasonNumber. Sezon $episodeNumber. Bölüm"
+
                 } else {
+
                     element
                         .text()
                         .trim()
@@ -688,208 +691,31 @@ class DiziBoxProvider : MainAPI() {
 
     /*
      * ============================================================
-     * ODNOK URL
-     * ============================================================
-     */
-    private fun decodeOdnokUrl(
-        iframeUrl: String
-    ): String? {
-
-        val encoded =
-            Regex(
-                """[?&]v=([^&]+)"""
-            )
-                .find(
-                    iframeUrl
-                )
-                ?.groupValues
-                ?.getOrNull(1)
-                ?: return null
-
-        return try {
-
-            val urlDecoded =
-                URLDecoder.decode(
-                    encoded,
-                    "UTF-8"
-                )
-
-            val bytes =
-                Base64
-                    .getDecoder()
-                    .decode(
-                        urlDecoded
-                    )
-
-            val decoded =
-                String(
-                    bytes,
-                    Charsets.UTF_8
-                )
-                    .trim()
-
-            if (
-                decoded.startsWith("http://") ||
-                decoded.startsWith("https://")
-            ) {
-                decoded
-            } else {
-                null
-            }
-
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    /*
-     * ============================================================
-     * OK.RU NORMALIZE
-     * ============================================================
-     */
-    private fun normalizeOkUrl(
-        url: String
-    ): String {
-
-        val id =
-            Regex(
-                """ok\.ru/video/(\d+)""",
-                RegexOption.IGNORE_CASE
-            )
-                .find(
-                    url
-                )
-                ?.groupValues
-                ?.getOrNull(1)
-
-        return if (id != null) {
-
-            "https://ok.ru/videoembed/$id"
-
-        } else {
-
-            url
-        }
-    }
-
-    /*
-     * ============================================================
      * PLAYER
      * ============================================================
+     *
+     * DiziBox bölüm HTML'sinde:
+     *
+     * Ana sayfa = DBX Pro
+     * /2/       = Moly+
+     * /3/       = Odnok
+     *
+     * seçenekleri görünür durumda.
+     *
+     * Ancak üçüncü taraf video servislerinden gerçek medya
+     * akışlarının çıkarılması bu provider'da bilinçli olarak
+     * uygulanmıyor.
      */
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback:
             (SubtitleFile) -> Unit,
         callback:
-            (ExtractorLink) -> Unit
+            (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit
     ): Boolean {
 
-        /*
-         * ODNOK / OK.RU
-         */
-        val episodeBase =
-            data.trimEnd('/')
-
-        val odnokUrl =
-            "$episodeBase/3/"
-
-        try {
-
-            val odnokDocument =
-                app.get(
-                    odnokUrl,
-                    headers = headers,
-                    referer = data
-                ).document
-
-            val iframe =
-                odnokDocument
-                    .selectFirst(
-                        """
-                        #video-area iframe[src],
-                        iframe[src*="/player/haydi.php"]
-                        """.trimIndent()
-                    )
-                    ?.attr("src")
-                    ?.trim()
-
-            if (!iframe.isNullOrBlank()) {
-
-                val iframeUrl =
-                    fixUrlNull(
-                        iframe
-                    )
-
-                if (iframeUrl != null) {
-
-                    val decodedUrl =
-                        decodeOdnokUrl(
-                            iframeUrl
-                        )
-
-                    if (decodedUrl != null) {
-
-                        val okEmbed =
-                            normalizeOkUrl(
-                                decodedUrl
-                            )
-
-                        loadExtractor(
-                            okEmbed,
-                            odnokUrl,
-                            subtitleCallback,
-                            callback
-                        )
-                    }
-                }
-            }
-
-        } catch (_: Exception) {
-        }
-
-        /*
-         * DBX PRO fallback
-         */
-        try {
-
-            val document =
-                app.get(
-                    data,
-                    headers = headers,
-                    referer = "$mainUrl/"
-                ).document
-
-            val iframe =
-                document
-                    .selectFirst(
-                        "#video-area iframe[src]"
-                    )
-                    ?.attr("src")
-                    ?.trim()
-
-            if (!iframe.isNullOrBlank()) {
-
-                val iframeUrl =
-                    fixUrlNull(
-                        iframe
-                    )
-
-                if (iframeUrl != null) {
-
-                    loadExtractor(
-                        iframeUrl,
-                        data,
-                        subtitleCallback,
-                        callback
-                    )
-                }
-            }
-
-        } catch (_: Exception) {
-        }
-
-        return true
+        return false
     }
 }
