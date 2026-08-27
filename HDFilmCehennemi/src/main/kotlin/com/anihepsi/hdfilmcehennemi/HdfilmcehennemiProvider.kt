@@ -105,8 +105,7 @@ class HdfilmcehennemiProvider : MainAPI() {
                     href,
                     TvType.TvSeries
                 ) {
-                    this.posterUrl =
-                        posterUrl
+                    this.posterUrl = posterUrl
                 }
 
             else ->
@@ -115,40 +114,31 @@ class HdfilmcehennemiProvider : MainAPI() {
                     href,
                     TvType.Movie
                 ) {
-                    this.posterUrl =
-                        posterUrl
+                    this.posterUrl = posterUrl
                 }
         }
     }
 
-    private fun Media.toSearchResponse():
-        SearchResponse? {
+    private fun Media.toSearchResponse(): SearchResponse? {
 
-        val title = title
-            ?: return null
-
-        val slug = slug
-            ?: return null
-
-        val slugPrefix =
-            slugPrefix.orEmpty()
+        val title = title ?: return null
+        val slug = slug ?: return null
+        val slugPrefix = slugPrefix.orEmpty()
 
         return newTvSeriesSearchResponse(
             title,
             "$mainUrl/$slugPrefix$slug",
             TvType.TvSeries
         ) {
-            posterUrl =
-                poster?.let {
-                    "$mainUrl/uploads/poster/$it"
-                }
+            posterUrl = poster?.let {
+                "$mainUrl/uploads/poster/$it"
+            }
         }
     }
 
     override suspend fun quickSearch(
         query: String
     ): List<SearchResponse> {
-
         return search(query)
     }
 
@@ -183,8 +173,7 @@ class HdfilmcehennemiProvider : MainAPI() {
         url: String
     ): LoadResponse? {
 
-        val document =
-            app.get(url).document
+        val document = app.get(url).document
 
         val title = document
             .selectFirst(
@@ -201,11 +190,6 @@ class HdfilmcehennemiProvider : MainAPI() {
                 )
                 ?.attr("src")
         )
-
-        val details =
-            document.select(
-                "div.mb-0.lh-lg"
-            )
 
         val tags = document
             .select(
@@ -243,14 +227,6 @@ class HdfilmcehennemiProvider : MainAPI() {
                 )
                 ?.text()
                 ?.trim()
-
-        val rating =
-            document
-                .selectFirst(
-                    "div.rating-votes div.rate span"
-                )
-                ?.text()
-                ?.toRatingInt()
 
         val actors =
             document
@@ -377,10 +353,8 @@ class HdfilmcehennemiProvider : MainAPI() {
                             href
                         ) {
                             this.name = name
-                            this.season =
-                                season
-                            this.episode =
-                                episodeNumber
+                            this.season = season
+                            this.episode = episodeNumber
                         }
                     }
 
@@ -390,20 +364,13 @@ class HdfilmcehennemiProvider : MainAPI() {
                 TvType.TvSeries,
                 episodes
             ) {
-                posterUrl =
-                    poster
+                posterUrl = poster
 
-                this.year =
-                    year
+                this.year = year
 
-                plot =
-                    description
+                plot = description
 
-                this.tags =
-                    tags
-
-                this.rating =
-                    rating
+                this.tags = tags
 
                 addActors(
                     actors
@@ -440,20 +407,13 @@ class HdfilmcehennemiProvider : MainAPI() {
                 TvType.Movie,
                 url
             ) {
-                posterUrl =
-                    poster
+                posterUrl = poster
 
-                this.year =
-                    year
+                this.year = year
 
-                plot =
-                    description
+                plot = description
 
-                this.tags =
-                    tags
-
-                this.rating =
-                    rating
+                this.tags = tags
 
                 addActors(
                     actors
@@ -472,13 +432,10 @@ class HdfilmcehennemiProvider : MainAPI() {
     private suspend fun invokeLocalSource(
         source: String,
         url: String,
-        sourceCallback:
-            (ExtractorLink) -> Unit
+        sourceCallback: (ExtractorLink) -> Unit
     ) {
 
-        if (
-            url.isBlank()
-        ) {
+        if (url.isBlank()) {
             return
         }
 
@@ -534,82 +491,73 @@ class HdfilmcehennemiProvider : MainAPI() {
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
-        subtitleCallback:
-            (SubtitleFile) -> Unit,
-        callback:
-            (ExtractorLink) -> Unit
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        app.get(
-            data
-        )
-            .document
-            .select(
-                "nav.nav.card-nav.nav-slider a.nav-link"
-            )
-            .map {
-
-                Pair(
-                    fixUrlNull(
-                        it.attr(
-                            "href"
-                        )
-                    ),
-                    it.text()
+        val sourceButtons =
+            app.get(data)
+                .document
+                .select(
+                    "nav.nav.card-nav.nav-slider a.nav-link"
                 )
-            }
-            .filter {
-                it.first != null
-            }
-            .apmap {
-                (
-                    url,
-                    source
-                ) ->
 
-                safeApiCall {
+        for (button in sourceButtons) {
 
-                    val sourcePage =
-                        app.get(
-                            url!!
-                        ).document
+            val url =
+                fixUrlNull(
+                    button.attr(
+                        "href"
+                    )
+                )
+                    ?: continue
 
-                    val iframeLink =
-                        sourcePage
-                            .selectFirst(
-                                "div.card-video > iframe"
-                            )
+            val source =
+                button.text()
+
+            safeApiCall {
+
+                val sourcePage =
+                    app.get(
+                        url
+                    ).document
+
+                val iframe =
+                    sourcePage
+                        .selectFirst(
+                            "div.card-video > iframe"
+                        )
+
+                val iframeLink =
+                    iframe
+                        ?.attr(
+                            "data-src"
+                        )
+                        ?.takeIf {
+                            it.isNotBlank()
+                        }
+                        ?: iframe
                             ?.attr(
-                                "data-src"
+                                "src"
                             )
                             ?.takeIf {
                                 it.isNotBlank()
                             }
-                            ?: sourcePage
-                                .selectFirst(
-                                    "div.card-video > iframe"
-                                )
-                                ?.attr(
-                                    "src"
-                                )
-                                ?.takeIf {
-                                    it.isNotBlank()
-                                }
-                            ?: return@safeApiCall
+                        ?: return@safeApiCall
 
-                    val cleanLink =
-                        fixUrlNull(
-                            iframeLink
-                        )
-                            ?: return@safeApiCall
-
-                    invokeLocalSource(
-                        source,
-                        cleanLink,
-                        callback
+                val cleanLink =
+                    fixUrlNull(
+                        iframeLink
                     )
-                }
+                        ?: return@safeApiCall
+
+                invokeLocalSource(
+                    source,
+                    cleanLink,
+                    callback
+                )
             }
+        }
 
         return true
     }
