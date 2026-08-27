@@ -33,12 +33,21 @@ class DiziBoxProvider : MainAPI() {
     )
 
     private val headers = mapOf(
-        "User-Agent" to
-            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
-        "Accept-Language" to
-            "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
-    )
+    "User-Agent" to
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/151.0.0.0 Safari/537.36",
+
+    "Accept" to
+        "text/html,application/xhtml+xml,application/xml;q=0.9," +
+        "image/avif,image/webp,image/apng,*/*;q=0.8",
+
+    "Accept-Language" to
+        "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+
+    "Cache-Control" to "no-cache",
+    "Pragma" to "no-cache"
+)
 
     /*
      * ============================================================
