@@ -30,9 +30,8 @@ class DiziBoxProvider : MainAPI() {
     )
 
     /*
-     * ÖNEMLİ:
-     * DiziBox Android/mobile User-Agent ile eksik HTML döndürüyor.
-     * Bu yüzden çalışan desktop UA'yı değiştirmiyoruz.
+     * DiziBox Android/mobile User-Agent ile eksik HTML döndürebiliyor.
+     * Bu nedenle desktop User-Agent kullanıyoruz.
      */
     private val headers = mapOf(
         "User-Agent" to
@@ -121,12 +120,6 @@ class DiziBoxProvider : MainAPI() {
             return emptyList()
         }
 
-        /*
-         * Site aramasını kullanmıyoruz.
-         *
-         * DiziBox arşiv sayfasının içinde yaklaşık tüm dizileri
-         * içeren alfabetik liste bulunuyor.
-         */
         val document =
             app.get(
                 "$mainUrl/dizi-arsivi/",
@@ -209,9 +202,6 @@ class DiziBoxProvider : MainAPI() {
         val episodes =
             mutableListOf<Episode>()
 
-        /*
-         * Sezon sayfalarını bul.
-         */
         val seasonLinks =
             document
                 .select("#seasons-list a[href]")
@@ -239,9 +229,6 @@ class DiziBoxProvider : MainAPI() {
                     it.first
                 }
 
-        /*
-         * Ana sayfanın içinde bölüm varsa önce onu al.
-         */
         collectEpisodesFromSeasonDocument(
             document = document,
             defaultSeason =
@@ -251,9 +238,6 @@ class DiziBoxProvider : MainAPI() {
             episodes = episodes
         )
 
-        /*
-         * Her sezon sayfasını oku.
-         */
         for ((seasonNumber, seasonUrl) in seasonLinks) {
 
             try {
@@ -272,13 +256,9 @@ class DiziBoxProvider : MainAPI() {
                 )
 
             } catch (_: Exception) {
-                // Bir sezon hata verirse diğerleri devam etsin.
             }
         }
 
-        /*
-         * Sezon listesi olmayan sayfalar için fallback.
-         */
         if (
             seasonLinks.isEmpty() &&
             episodes.isEmpty()
@@ -334,9 +314,6 @@ class DiziBoxProvider : MainAPI() {
         val episodeBase =
             data.trimEnd('/')
 
-        /*
-         * Ana bölüm sayfası.
-         */
         val mainDocument =
             try {
 
@@ -356,8 +333,6 @@ class DiziBoxProvider : MainAPI() {
          * ana bölüm = DBX Pro
          * /2/       = Moly+
          * /3/       = Odnok
-         *
-         * Moly'yi kaldırmıyoruz.
          */
         val playerPages =
             mutableListOf(
@@ -367,7 +342,8 @@ class DiziBoxProvider : MainAPI() {
             )
 
         /*
-         * Player seçim menüsündeki gerçek URL'leri de ekle.
+         * Sayfadaki player seçim menüsünden
+         * açık URL'leri de topla.
          */
         mainDocument
             ?.select(
@@ -385,8 +361,8 @@ class DiziBoxProvider : MainAPI() {
                 if (candidate.isNotBlank()) {
 
                     fixUrlNull(candidate)
-                        ?.let { url ->
-                            playerPages.add(url)
+                        ?.let { playerUrl ->
+                            playerPages.add(playerUrl)
                         }
                 }
             }
@@ -394,9 +370,8 @@ class DiziBoxProvider : MainAPI() {
         val uniquePlayerPages =
             playerPages.distinct()
 
-        /*
-         * DBX Pro / Moly+ / Odnok sayfalarını sırayla kontrol et.
-         */
+        var foundLink = false
+
         for (playerPage in uniquePlayerPages) {
 
             try {
@@ -421,12 +396,8 @@ class DiziBoxProvider : MainAPI() {
                         )
                             ?: continue
 
-                    println(
-                        "DIZIBOX DEBUG iframe = $iframeUrl"
-                    )
-
                     // ---------------------------------------------------------
-                    // DBX PRO / KING.PHP TANILAMA TESTİ
+                    // DBX PRO / KING.PHP
                     // ---------------------------------------------------------
 
                     if (
@@ -438,11 +409,10 @@ class DiziBoxProvider : MainAPI() {
                         try {
 
                             /*
-                             * Burada stream çözmüyoruz.
+                             * king.php sayfasını doğru bölüm/player
+                             * sayfasını Referer olarak vererek açıyoruz.
                              *
-                             * Sadece iframe'i, geldiği bölüm sayfasını
-                             * Referer olarak verip normal HTTP isteğiyle
-                             * çağırıyoruz.
+                             * Gizli stream veya token çözümü yok.
                              */
                             val kingResponse =
                                 app.get(
@@ -454,58 +424,66 @@ class DiziBoxProvider : MainAPI() {
                             val kingDocument =
                                 kingResponse.document
 
-                            println(
-                                "DIZIBOX DEBUG king finalUrl = " +
-                                    kingDocument.location()
-                            )
-
-                            println(
-                                "DIZIBOX DEBUG king title = " +
-                                    kingDocument.title()
-                            )
-
-                            println(
-                                "DIZIBOX DEBUG king htmlLength = " +
-                                    kingResponse.text.length
-                            )
-
-                            val kingIframes =
+                            /*
+                             * king.php HTML'inde açıkça bulunan
+                             * ikinci iframe varsa onu CloudStream'ın
+                             * standart extractor sistemine ver.
+                             */
+                            val nestedIframes =
                                 kingDocument
                                     .select(
                                         "iframe[src]"
                                     )
-                                    .joinToString(
-                                        " | "
-                                    ) {
-                                        it.attr("src")
+
+                            for (nestedIframe in nestedIframes) {
+
+                                val nestedUrl =
+                                    fixUrlNull(
+                                        nestedIframe.attr(
+                                            "src"
+                                        )
+                                    )
+                                        ?: continue
+
+                                try {
+
+                                    val loaded =
+                                        loadExtractor(
+                                            nestedUrl,
+                                            iframeUrl,
+                                            subtitleCallback,
+                                            callback
+                                        )
+
+                                    if (loaded) {
+                                        foundLink = true
                                     }
 
-                            println(
-                                "DIZIBOX DEBUG king iframes = " +
-                                    kingIframes
-                            )
+                                } catch (_: Exception) {
+                                }
+                            }
 
-                        } catch (e: Exception) {
-
-                            println(
-                                "DIZIBOX DEBUG king ERROR = " +
-                                    e.message
-                            )
+                        } catch (_: Exception) {
                         }
                     }
 
                     // ---------------------------------------------------------
-                    // STANDART CLOUDSTREAM EXTRACTOR
+                    // MOLY / ODNOK / DİĞER AÇIK IFRAME
                     // ---------------------------------------------------------
 
                     try {
 
-                        loadExtractor(
-                            iframeUrl,
-                            playerPage,
-                            subtitleCallback,
-                            callback
-                        )
+                        val loaded =
+                            loadExtractor(
+                                iframeUrl,
+                                playerPage,
+                                subtitleCallback,
+                                callback
+                            )
+
+                        if (loaded) {
+                            foundLink = true
+                        }
 
                     } catch (_: Exception) {
                     }
@@ -515,7 +493,7 @@ class DiziBoxProvider : MainAPI() {
             }
         }
 
-        return true
+        return foundLink
     }
 
     // -------------------------------------------------------------------------
@@ -801,10 +779,6 @@ class DiziBoxProvider : MainAPI() {
                 )
                     ?: continue
 
-            /*
-             * Örnek:
-             * the-ghost-in-the-shell-1-sezon-8-bolum-izle
-             */
             val match =
                 Regex(
                     """-(\d+)-sezon-(\d+)-bolum(?:-|/|$)""",
