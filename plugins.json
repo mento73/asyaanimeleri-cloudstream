@@ -98,5 +98,26 @@
         "description": "DiziPal CloudStream extension",
         "url": "https://raw.githubusercontent.com/mento73/asyaanimeleri-cloudstream/builds/DiziPal.cs3",
         "name": "DiziPal"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=hdfilmcehennemi.nl&sz=%size%",
+        "fileHash": "sha256-b1991cb3736959471f8a03444e84f3f333bffaaf71e7fb7c3ab6264a1d1ce977",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/mento73/asyaanimeleri-cloudstream",
+        "fileSize": 20024,
+        "status": 1,
+        "language": "tr",
+        "authors": [
+            "Hexated"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie"
+        ],
+        "version": 1,
+        "internalName": "HDFilmCehennemi",
+        "description": "HDFilmCehennemi film ve yabanc\u0131 dizi kayna\u011f\u0131.",
+        "url": "https://raw.githubusercontent.com/mento73/asyaanimeleri-cloudstream/builds/HDFilmCehennemi.cs3",
+        "name": "HDFilmCehennemi"
     }
 ]
