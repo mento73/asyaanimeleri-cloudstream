@@ -162,6 +162,7 @@ class HdfilmcehennemiProvider : MainAPI() {
 
         val detectedType =
             when {
+
                 href.contains("/dizi/", true) ->
                     TvType.TvSeries
 
@@ -175,26 +176,11 @@ class HdfilmcehennemiProvider : MainAPI() {
                     TvType.Movie
             }
 
-        return createSearchResponse(
-            cleanTitle(title),
-            href,
-            poster,
-            detectedType
-        )
-    }
-
-    private fun createSearchResponse(
-        title: String,
-        url: String,
-        poster: String?,
-        type: TvType
-    ): SearchResponse {
-
-        return if (type == TvType.TvSeries) {
+        return if (detectedType == TvType.TvSeries) {
 
             newTvSeriesSearchResponse(
-                title,
-                url,
+                cleanTitle(title),
+                href,
                 TvType.TvSeries
             ) {
                 posterUrl = poster
@@ -203,8 +189,8 @@ class HdfilmcehennemiProvider : MainAPI() {
         } else {
 
             newMovieSearchResponse(
-                title,
-                url,
+                cleanTitle(title),
+                href,
                 TvType.Movie
             ) {
                 posterUrl = poster
@@ -438,13 +424,14 @@ class HdfilmcehennemiProvider : MainAPI() {
     /*
      * SEARCH
      *
-     * HDFilmCehennemi'nin AJAX araması.
-     * Hexated'in orijinal sağlayıcısında kullanılan yöntem budur.
+     * Önce sitenin kendi AJAX aramasını kullanıyoruz.
+     * Sonuç gelmezse HTML aramasına düşüyoruz.
      */
 
     override suspend fun quickSearch(
         query: String
     ): List<SearchResponse> {
+
         return search(query)
     }
 
@@ -452,37 +439,35 @@ class HdfilmcehennemiProvider : MainAPI() {
         query: String
     ): List<SearchResponse> {
 
+        val ajaxResponse =
+            app.post(
+                "$mainUrl/search/",
+                data = mapOf(
+                    "query" to query
+                ),
+                headers = mapOf(
+                    "User-Agent" to browserHeaders.getValue("User-Agent"),
+                    "Accept" to
+                        "application/json, text/javascript, */*; q=0.01",
+                    "Accept-Language" to
+                        browserHeaders.getValue("Accept-Language"),
+                    "X-Requested-With" to
+                        "XMLHttpRequest"
+                ),
+                referer = "$mainUrl/"
+            )
+
         val ajaxResults =
-            safeApiCall {
-
-                app.post(
-                    "$mainUrl/search/",
-                    data = mapOf(
-                        "query" to query
-                    ),
-                    headers =
-                        browserHeaders +
-                            mapOf(
-                                "Accept" to
-                                    "application/json, text/javascript, */*; q=0.01",
-
-                                "Content-Type" to
-                                    "application/x-www-form-urlencoded; charset=UTF-8",
-
-                                "X-Requested-With" to
-                                    "XMLHttpRequest"
-                            ),
-                    referer = "$mainUrl/"
-                )
-                    .parsedSafe<SearchResult>()
-                    ?.result
-                    ?.mapNotNull {
-                        it.toSearchResponse()
-                    }
-                    .orEmpty()
-            }.orEmpty()
+            ajaxResponse
+                .parsedSafe<Result>()
+                ?.result
+                ?.mapNotNull {
+                    it.toSearchResponse()
+                }
+                .orEmpty()
 
         if (ajaxResults.isNotEmpty()) {
+
             return ajaxResults
                 .distinctBy {
                     it.url
@@ -490,7 +475,7 @@ class HdfilmcehennemiProvider : MainAPI() {
         }
 
         /*
-         * AJAX endpoint ileride değişirse HTML fallback.
+         * AJAX sonuç vermezse HTML fallback.
          */
 
         val encodedQuery =
@@ -518,7 +503,7 @@ class HdfilmcehennemiProvider : MainAPI() {
             }
     }
 
-    private fun SearchMedia.toSearchResponse():
+    private fun Media.toSearchResponse():
         SearchResponse? {
 
         val mediaTitle =
@@ -545,14 +530,11 @@ class HdfilmcehennemiProvider : MainAPI() {
                 .trim('/')
 
         val path =
-            listOf(
-                prefix,
+            if (prefix.isBlank()) {
                 mediaSlug
-            )
-                .filter {
-                    it.isNotBlank()
-                }
-                .joinToString("/")
+            } else {
+                "$prefix/$mediaSlug"
+            }
 
         val url =
             "$mainUrl/$path/"
@@ -563,10 +545,10 @@ class HdfilmcehennemiProvider : MainAPI() {
                 ?.takeIf {
                     it.isNotBlank()
                 }
-                ?.let {
-                    rawPoster ->
+                ?.let { rawPoster ->
 
                     when {
+
                         rawPoster.startsWith(
                             "http://",
                             true
@@ -599,16 +581,28 @@ class HdfilmcehennemiProvider : MainAPI() {
                     ignoreCase = true
                 )
 
-        return createSearchResponse(
-            cleanTitle(mediaTitle),
-            url,
-            posterUrl,
-            if (isSeries) {
+        return if (isSeries) {
+
+            newTvSeriesSearchResponse(
+                cleanTitle(mediaTitle),
+                url,
                 TvType.TvSeries
-            } else {
-                TvType.Movie
+            ) {
+                this.posterUrl =
+                    posterUrl
             }
-        )
+
+        } else {
+
+            newMovieSearchResponse(
+                cleanTitle(mediaTitle),
+                url,
+                TvType.Movie
+            ) {
+                this.posterUrl =
+                    posterUrl
+            }
+        }
     }
 
     override suspend fun load(
@@ -690,7 +684,9 @@ class HdfilmcehennemiProvider : MainAPI() {
             Regex(
                 """\b(19|20)\d{2}\b"""
             )
-                .find(document.text())
+                .find(
+                    document.text()
+                )
                 ?.value
                 ?.toIntOrNull()
 
@@ -796,6 +792,7 @@ class HdfilmcehennemiProvider : MainAPI() {
 
                         name =
                             when {
+
                                 season != null &&
                                     episode != null ->
                                     "$season. Sezon $episode. Bölüm"
@@ -1109,14 +1106,14 @@ class HdfilmcehennemiProvider : MainAPI() {
         return true
     }
 
-    data class SearchResult(
+    data class Result(
         @JsonProperty("result")
         val result:
-            ArrayList<SearchMedia>? =
+            ArrayList<Media>? =
             arrayListOf()
     )
 
-    data class SearchMedia(
+    data class Media(
         @JsonProperty("title")
         val title:
             String? = null,
