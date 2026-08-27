@@ -64,80 +64,138 @@ class AsyaAnimeleriProvider : MainAPI() {
     ): HomePageResponse {
 
         /*
-         * #latest ve #popular gerçek HTTP path değil.
-         * Bunları sadece iki ana sayfa bölümünü ayırt etmek
-         * için işaret olarak kullanıyoruz.
+         * Son Eklenenler ve Popüler Seriler ana sayfadaki
+         * sabit bloklar.
+         *
+         * Bunların ikinci/üçüncü sayfası yok.
+         * CloudStream aynı bloğu tekrar istemesin diye
+         * hasNext = false döndürüyoruz.
          */
         if (
             request.name == "Son Eklenenler" ||
             request.name == "Popüler Seriler"
         ) {
 
-            val document = app.get(mainUrl).document
+            val document =
+                app.get(mainUrl).document
 
-            val animeList = when (request.name) {
+            val animeList =
+                when (request.name) {
 
-                "Son Eklenenler" ->
-                    parseHomeSection(
-                        document = document,
-                        titleTexts = listOf(
-                            "Son Eklenenler"
+                    "Son Eklenenler" ->
+                        parseHomeSection(
+                            document = document,
+                            titleTexts = listOf(
+                                "Son Eklenenler"
+                            )
                         )
-                    )
 
-                "Popüler Seriler" ->
-                    parseHomeSection(
-                        document = document,
-                        titleTexts = listOf(
-                            "Popüler Serler",
-                            "Popüler Seriler"
+                    "Popüler Seriler" ->
+                        parseHomeSection(
+                            document = document,
+                            titleTexts = listOf(
+                                "Popüler Serler",
+                                "Popüler Seriler"
+                            )
                         )
-                    )
 
-                else ->
-                    emptyList()
-            }
+                    else ->
+                        emptyList()
+                }
 
             return newHomePageResponse(
                 request.name,
-                animeList
+                animeList,
+                hasNext = false
             )
         }
 
         /*
          * Normal seri/tür sayfaları.
+         *
+         * Tüm Animeler:
+         *
+         * page 1 -> /series/
+         * page 2 -> /series/page/2/
+         * page 3 -> /series/page/3/
+         *
+         * Türler:
+         *
+         * page 1 -> /genres/aksiyon/
+         * page 2 -> /genres/aksiyon/page/2/
          */
-        val url = when {
+        val url =
+            when {
 
-            request.data.contains("sayfa") && page == 1 ->
-                request.data
-                    .replace("/page/sayfa/", "/")
-                    .replace("sayfa", "1")
+                request.name == "Tüm Animeler" -> {
 
-            request.data.contains("sayfa") ->
-                request.data.replace(
-                    "sayfa",
-                    page.toString()
-                )
+                    if (page <= 1) {
+                        "$mainUrl/series/"
+                    } else {
+                        "$mainUrl/series/page/$page/"
+                    }
+                }
 
-            else ->
-                request.data
-        }
+                request.data.contains("sayfa") &&
+                    page <= 1 -> {
 
-        val document = app.get(url).document
+                    request.data
+                        .replace(
+                            "/page/sayfa/",
+                            "/"
+                        )
+                }
 
-        val animeList = document
-            .select("article.bs")
-            .mapNotNull {
-                it.toAnimeCard()
+                request.data.contains("sayfa") -> {
+
+                    request.data.replace(
+                        "sayfa",
+                        page.toString()
+                    )
+                }
+
+                else ->
+                    request.data
             }
-            .distinctBy {
-                it.url
-            }
+
+        val document =
+            app.get(url).document
+
+        val animeList =
+            document
+                .select("article.bs")
+                .mapNotNull {
+                    it.toAnimeCard()
+                }
+                .distinctBy {
+                    it.url
+                }
+
+        /*
+         * Gerçek sonraki sayfa bağlantısı varsa devam et.
+         * Yoksa son sayfada dur.
+         */
+        val nextPageNumber =
+            page + 1
+
+        val hasNext =
+            animeList.isNotEmpty() &&
+                (
+                    document.selectFirst(
+                        "a[href*=\"/page/$nextPageNumber/\"]"
+                    ) != null ||
+                        document.selectFirst(
+                            ".pagination a.next, " +
+                                ".pagination .next a, " +
+                                ".hpage a.r, " +
+                                "a.next.page-numbers"
+                        ) != null
+                    )
 
         return newHomePageResponse(
             request.name,
-            animeList
+            animeList,
+            hasNext = hasNext
         )
     }
 
