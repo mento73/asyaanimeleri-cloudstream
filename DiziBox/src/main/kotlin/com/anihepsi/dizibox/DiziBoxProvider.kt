@@ -4,6 +4,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.net.URLDecoder
+import java.util.Base64
 
 /*
  * DiziBox provider adapted for the Anihepsi CloudStream repository.
@@ -12,8 +14,8 @@ import org.jsoup.nodes.Element
  * keyiflerolsun / Kekik-cloudstream
  * nikyokki / nik-cloudstream
  *
- * This provider only uses public HTML, openly exposed player/iframe URLs
- * and CloudStream's standard extractor system.
+ * This provider only uses public HTML, openly exposed player/iframe URLs,
+ * normal Base64 URL decoding, and CloudStream's standard extractor system.
  */
 
 class DiziBoxProvider : MainAPI() {
@@ -29,10 +31,6 @@ class DiziBoxProvider : MainAPI() {
         TvType.TvSeries
     )
 
-    /*
-     * DiziBox mobil/Android User-Agent ile eksik HTML döndürebiliyor.
-     * Bu yüzden çalışan masaüstü User-Agent'ı korunuyor.
-     */
     private val headers = mapOf(
         "User-Agent" to
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -113,8 +111,7 @@ class DiziBoxProvider : MainAPI() {
         query: String
     ): List<SearchResponse> {
 
-        val cleanQuery =
-            query.trim()
+        val cleanQuery = query.trim()
 
         if (cleanQuery.isBlank()) {
             return emptyList()
@@ -229,9 +226,6 @@ class DiziBoxProvider : MainAPI() {
                     it.first
                 }
 
-        /*
-         * Ana dizi sayfasında bölüm varsa önce onu al.
-         */
         collectEpisodesFromSeasonDocument(
             document = document,
             defaultSeason =
@@ -241,9 +235,6 @@ class DiziBoxProvider : MainAPI() {
             episodes = episodes
         )
 
-        /*
-         * Her sezon sayfasını sırayla oku.
-         */
         for ((seasonNumber, seasonUrl) in seasonLinks) {
 
             try {
@@ -262,13 +253,9 @@ class DiziBoxProvider : MainAPI() {
                 )
 
             } catch (_: Exception) {
-                // Bir sezon hata verirse diğerlerine devam et.
             }
         }
 
-        /*
-         * Sezon listesi olmayan sayfalarda fallback.
-         */
         if (
             seasonLinks.isEmpty() &&
             episodes.isEmpty()
@@ -311,6 +298,76 @@ class DiziBoxProvider : MainAPI() {
     }
 
     // -------------------------------------------------------------------------
+    // ODNOK / OK.RU
+    // -------------------------------------------------------------------------
+
+    private fun decodeOdnokUrl(
+        iframeUrl: String
+    ): String? {
+
+        val encoded =
+            Regex(
+                """[?&]v=([^&]+)"""
+            )
+                .find(
+                    iframeUrl
+                )
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: return null
+
+        return try {
+
+            val urlDecoded =
+                URLDecoder.decode(
+                    encoded,
+                    "UTF-8"
+                )
+
+            val decoded =
+                String(
+                    Base64
+                        .getDecoder()
+                        .decode(
+                            urlDecoded
+                        ),
+                    Charsets.UTF_8
+                )
+                    .trim()
+
+            decoded.takeIf {
+                it.startsWith("http://") ||
+                    it.startsWith("https://")
+            }
+
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun normalizeOkUrl(
+        url: String
+    ): String {
+
+        val id =
+            Regex(
+                """ok\.ru/video/(\d+)""",
+                RegexOption.IGNORE_CASE
+            )
+                .find(
+                    url
+                )
+                ?.groupValues
+                ?.getOrNull(1)
+
+        return if (id != null) {
+            "https://ok.ru/videoembed/$id"
+        } else {
+            url
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // PLAYER
     // -------------------------------------------------------------------------
 
@@ -324,9 +381,112 @@ class DiziBoxProvider : MainAPI() {
         val episodeBase =
             data.trimEnd('/')
 
+        var foundLink = false
+
+        // ---------------------------------------------------------------------
+        // 1) ODNOK / OK.RU
+        // ---------------------------------------------------------------------
+
         /*
-         * Ana bölüm sayfasını al.
+         * Bu yol daha önce çalışıyordu:
+         *
+         * bölüm /3/
+         * -> /player/haydi.php?v=<base64>
+         * -> Base64 decode
+         * -> https://ok.ru/video/<id>
+         * -> https://ok.ru/videoembed/<id>
+         * -> loadExtractor()
          */
+        try {
+
+            val odnokPage =
+                "$episodeBase/3/"
+
+            val odnokDocument =
+                app.get(
+                    odnokPage,
+                    headers = headers,
+                    referer = "$episodeBase/"
+                ).document
+
+            val odnokIframe =
+                odnokDocument
+                    .selectFirst(
+                        "#video-area iframe[src], " +
+                            "iframe[src*=\"/player/haydi.php\"]"
+                    )
+                    ?.attr("src")
+                    ?.trim()
+
+            if (!odnokIframe.isNullOrBlank()) {
+
+                val iframeUrl =
+                    fixUrlNull(
+                        odnokIframe
+                    )
+
+                if (iframeUrl != null) {
+
+                    val decoded =
+                        decodeOdnokUrl(
+                            iframeUrl
+                        )
+
+                    if (decoded != null) {
+
+                        val okUrl =
+                            normalizeOkUrl(
+                                decoded
+                            )
+
+                        try {
+
+                            val loaded =
+                                loadExtractor(
+                                    okUrl,
+                                    odnokPage,
+                                    subtitleCallback,
+                                    callback
+                                )
+
+                            if (loaded) {
+                                foundLink = true
+                            }
+
+                        } catch (_: Exception) {
+                        }
+                    }
+
+                    /*
+                     * Fallback:
+                     * CloudStream wrapper'ı doğrudan tanıyorsa onu da dene.
+                     */
+                    try {
+
+                        val loaded =
+                            loadExtractor(
+                                iframeUrl,
+                                odnokPage,
+                                subtitleCallback,
+                                callback
+                            )
+
+                        if (loaded) {
+                            foundLink = true
+                        }
+
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+
+        } catch (_: Exception) {
+        }
+
+        // ---------------------------------------------------------------------
+        // 2) DBX PRO + MOLY + AÇIK PLAYERLAR
+        // ---------------------------------------------------------------------
+
         val mainDocument =
             try {
 
@@ -340,26 +500,12 @@ class DiziBoxProvider : MainAPI() {
                 null
             }
 
-        /*
-         * DiziBox'taki bilinen player sayfaları:
-         *
-         * ana bölüm = DBX Pro
-         * /2/       = Moly+
-         * /3/       = Odnok
-         */
         val playerPages =
             mutableListOf(
                 "$episodeBase/",
-                "$episodeBase/2/",
-                "$episodeBase/3/"
+                "$episodeBase/2/"
             )
 
-        /*
-         * Player seçim menüsünde açıkça verilen URL'leri de ekle.
-         *
-         * Böylece ileride /2/ veya /3/ yapısı değişirse,
-         * HTML'deki gerçek bağlantı kullanılabilir.
-         */
         mainDocument
             ?.select(
                 "select.woca-linkpages-dd option"
@@ -375,24 +521,25 @@ class DiziBoxProvider : MainAPI() {
 
                 if (candidate.isNotBlank()) {
 
-                    fixUrlNull(candidate)
-                        ?.let { playerUrl ->
+                    val fixed =
+                        fixUrlNull(
+                            candidate
+                        )
 
-                            playerPages.add(
-                                playerUrl
-                            )
-                        }
+                    if (
+                        fixed != null &&
+                        !fixed.endsWith("/3/")
+                    ) {
+                        playerPages.add(
+                            fixed
+                        )
+                    }
                 }
             }
 
         val uniquePlayerPages =
             playerPages.distinct()
 
-        var foundLink = false
-
-        /*
-         * DBX Pro, Moly+ ve Odnok sayfalarını sırayla kontrol ediyoruz.
-         */
         for (playerPage in uniquePlayerPages) {
 
             try {
@@ -404,9 +551,6 @@ class DiziBoxProvider : MainAPI() {
                         referer = "$episodeBase/"
                     ).document
 
-                /*
-                 * Yalnızca sayfanın açıkça sunduğu iframe'leri al.
-                 */
                 val iframeElements =
                     document.select(
                         "#video-area iframe[src]"
@@ -420,12 +564,6 @@ class DiziBoxProvider : MainAPI() {
                         )
                             ?: continue
 
-                    /*
-                     * Burada DBX / Moly / Odnok'a özel gizli çözüm yok.
-                     *
-                     * Açık iframe URL'sini doğrudan CloudStream'ın
-                     * standart extractor sistemine veriyoruz.
-                     */
                     try {
 
                         val loaded =
