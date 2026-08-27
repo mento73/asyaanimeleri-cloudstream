@@ -142,35 +142,70 @@ class DiziBoxProvider : MainAPI() {
     }
 
     override suspend fun search(
-        query: String
-    ): List<SearchResponse> {
+    query: String
+): List<SearchResponse> {
 
-        if (query.isBlank()) {
-            return emptyList()
-        }
+    val cleanQuery = query.trim()
 
-        val encoded =
-            java.net.URLEncoder.encode(
-                query.trim(),
-                "UTF-8"
-            )
-
-        val document =
-            app.get(
-                "$mainUrl/?s=$encoded",
-                headers = headers,
-                referer = "$mainUrl/"
-            ).document
-
-        return document
-            .select("#search article.detailed-article")
-            .mapNotNull { article ->
-                article.toSearchResult()
-            }
-            .distinctBy {
-                it.url
-            }
+    if (cleanQuery.isBlank()) {
+        return emptyList()
     }
+
+    val document =
+        app.get(
+            "$mainUrl/dizi-arsivi/",
+            headers = headers,
+            referer = "$mainUrl/"
+        ).document
+
+    val normalizedQuery =
+        cleanQuery.lowercase()
+
+    return document
+        .select(
+            "ul.alphabetical-category-list a[href*=\"/diziler/\"]"
+        )
+        .mapNotNull { link ->
+
+            val href =
+                fixUrlNull(
+                    link.attr("href")
+                )
+                    ?: return@mapNotNull null
+
+            val title =
+                link
+                    .text()
+                    .trim()
+                    .ifBlank {
+                        link
+                            .attr("title")
+                            .removeSuffix(" izle")
+                            .trim()
+                    }
+
+            if (title.isBlank()) {
+                return@mapNotNull null
+            }
+
+            if (
+                !title
+                    .lowercase()
+                    .contains(normalizedQuery)
+            ) {
+                return@mapNotNull null
+            }
+
+            newTvSeriesSearchResponse(
+                title,
+                href,
+                TvType.TvSeries
+            )
+        }
+        .distinctBy {
+            it.url
+        }
+}
 
     /*
      * ============================================================
