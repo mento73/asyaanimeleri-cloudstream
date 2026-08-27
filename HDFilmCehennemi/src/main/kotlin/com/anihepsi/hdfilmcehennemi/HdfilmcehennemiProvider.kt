@@ -6,11 +6,16 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.mvvm.safeApiCall
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.net.URLEncoder
 
 /*
  * Original Hdfilmcehennemi implementation:
  * Hexated / cloudstream-extensions-multilingual
+ *
+ * Search flow adapted with reference to:
+ * enXov / hdfilmcehennemi-stremio
  *
  * Adapted for the Anihepsi CloudStream repository.
  */
@@ -23,7 +28,7 @@ class HdfilmcehennemiProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "tr"
 
-    override val hasQuickSearch = false
+    override val hasQuickSearch = true
     override val hasDownloadSupport = true
 
     override val supportedTypes = setOf(
@@ -423,84 +428,138 @@ class HdfilmcehennemiProvider : MainAPI() {
     /*
      * SEARCH
      *
-     * Hexated'in orijinal Hdfilmcehennemi sağlayıcısındaki
-     * sunucu taraflı arama akışı kullanılıyor.
+     * Güncel HDFilmCehennemi araması:
      *
-     * Quick search kapalı; CloudStream arama gönderildiğinde
-     * doğrudan search() çalışır.
+     * GET /search/?q=QUERY
+     *
+     * Response:
+     * {
+     *   "results": [
+     *      "<html>...</html>",
+     *      "<html>...</html>"
+     *   ]
+     * }
      */
+
+    override suspend fun quickSearch(
+        query: String
+    ): List<SearchResponse> {
+
+        return search(query)
+    }
 
     override suspend fun search(
         query: String
     ): List<SearchResponse> {
 
-        val response =
-            app.post(
-                "$mainUrl/search/",
-                data = mapOf(
-                    "query" to query
-                ),
-                referer = "$mainUrl/",
-                headers = mapOf(
-                    "Accept" to
-                        "application/json, text/javascript, */*; q=0.01",
-                    "X-Requested-With" to
-                        "XMLHttpRequest"
-                )
+        if (query.isBlank()) {
+            return emptyList()
+        }
+
+        val encodedQuery =
+            URLEncoder.encode(
+                query.trim(),
+                "UTF-8"
             )
 
-        return response
-            .parsedSafe<Result>()
-            ?.result
-            ?.mapNotNull {
-                it.toSearchResponse()
+        val response =
+            app.get(
+                "$mainUrl/search/?q=$encodedQuery",
+                headers =
+                    browserHeaders +
+                        mapOf(
+                            "X-Requested-With" to "fetch",
+                            "Accept" to "application/json"
+                        ),
+                referer = "$mainUrl/"
+            )
+
+        val snippets =
+            response
+                .parsedSafe<SearchAjaxResponse>()
+                ?.results
+                .orEmpty()
+
+        return snippets
+            .mapNotNull {
+                parseSearchSnippet(it)
             }
-            ?.distinctBy {
+            .distinctBy {
                 it.url
             }
-            ?: emptyList()
     }
 
-    private fun Media.toSearchResponse():
-        SearchResponse? {
+    private fun parseSearchSnippet(
+        html: String
+    ): SearchResponse? {
 
-        val mediaTitle =
-            title
-                ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
+        if (html.isBlank()) {
+            return null
+        }
+
+        val document =
+            Jsoup.parseBodyFragment(
+                html,
+                mainUrl
+            )
+
+        val container =
+            document.body()
+
+        val anchor =
+            container
+                .selectFirst("a[href]")
                 ?: return null
 
-        val mediaSlug =
-            slug
-                ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
+        val href =
+            fixUrlNull(
+                anchor.attr("href")
+            )
                 ?: return null
 
-        val mediaUrl =
-            "$mainUrl/${slugPrefix.orEmpty()}$mediaSlug"
+        val image =
+            container.selectFirst("img")
 
-        val mediaPoster =
-            poster
+        val title =
+            container
+                .selectFirst("h4.title")
+                ?.text()
                 ?.trim()
                 ?.takeIf {
                     it.isNotBlank()
                 }
-                ?.let {
-                    "$mainUrl/uploads/poster/$it"
-                }
+                ?: image
+                    ?.attr("alt")
+                    ?.trim()
+                    ?.takeIf {
+                        it.isNotBlank()
+                    }
+                ?: anchor
+                    .text()
+                    .trim()
+                    .takeIf {
+                        it.isNotBlank()
+                    }
+                ?: return null
+
+        val poster =
+            image?.let {
+                extractImage(it)
+            }
+
+        val typeText =
+            container
+                .selectFirst(".type")
+                ?.text()
+                ?.trim()
+                .orEmpty()
 
         val isSeries =
-            slugPrefix
-                .orEmpty()
-                .contains(
-                    "dizi",
-                    ignoreCase = true
-                ) ||
-                mediaUrl.contains(
+            typeText.equals(
+                "dizi",
+                ignoreCase = true
+            ) ||
+                href.contains(
                     "/dizi/",
                     ignoreCase = true
                 )
@@ -508,23 +567,21 @@ class HdfilmcehennemiProvider : MainAPI() {
         return if (isSeries) {
 
             newTvSeriesSearchResponse(
-                mediaTitle,
-                mediaUrl,
+                cleanTitle(title),
+                href,
                 TvType.TvSeries
             ) {
-                posterUrl =
-                    mediaPoster
+                posterUrl = poster
             }
 
         } else {
 
             newMovieSearchResponse(
-                mediaTitle,
-                mediaUrl,
+                cleanTitle(title),
+                href,
                 TvType.Movie
             ) {
-                posterUrl =
-                    mediaPoster
+                posterUrl = poster
             }
         }
     }
@@ -755,17 +812,10 @@ class HdfilmcehennemiProvider : MainAPI() {
                 }
             ) {
 
-                posterUrl =
-                    poster
-
-                this.year =
-                    year
-
-                plot =
-                    description
-
-                this.tags =
-                    tags
+                posterUrl = poster
+                this.year = year
+                plot = description
+                this.tags = tags
 
                 addActors(
                     actors
@@ -784,17 +834,10 @@ class HdfilmcehennemiProvider : MainAPI() {
             url
         ) {
 
-            posterUrl =
-                poster
-
-            this.year =
-                year
-
-            plot =
-                description
-
-            this.tags =
-                tags
+            posterUrl = poster
+            this.year = year
+            plot = description
+            this.tags = tags
 
             addActors(
                 actors
@@ -1030,28 +1073,10 @@ class HdfilmcehennemiProvider : MainAPI() {
         return true
     }
 
-    data class Result(
-        @JsonProperty("result")
-        val result:
-            ArrayList<Media>? =
+    data class SearchAjaxResponse(
+        @JsonProperty("results")
+        val results:
+            ArrayList<String>? =
             arrayListOf()
-    )
-
-    data class Media(
-        @JsonProperty("title")
-        val title:
-            String? = null,
-
-        @JsonProperty("poster")
-        val poster:
-            String? = null,
-
-        @JsonProperty("slug")
-        val slug:
-            String? = null,
-
-        @JsonProperty("slug_prefix")
-        val slugPrefix:
-            String? = null
     )
 }
