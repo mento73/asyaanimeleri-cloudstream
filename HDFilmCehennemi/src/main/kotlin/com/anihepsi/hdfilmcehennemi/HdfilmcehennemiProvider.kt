@@ -1,13 +1,11 @@
 package com.anihepsi.hdfilmcehennemi
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.mvvm.safeApiCall
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.net.URLEncoder
 
 /*
  * Original Hdfilmcehennemi implementation:
@@ -424,14 +422,14 @@ class HdfilmcehennemiProvider : MainAPI() {
     /*
      * SEARCH
      *
-     * Önce sitenin kendi AJAX aramasını kullanıyoruz.
-     * Sonuç gelmezse HTML aramasına düşüyoruz.
+     * Sitenin AJAX/WordPress aramasına bağlı kalmıyoruz.
+     * Zaten çalıştığını bildiğimiz katalog sayfalarını okuyup
+     * aynı kart parser'ı ile sonuçları çıkarıyoruz.
      */
 
     override suspend fun quickSearch(
         query: String
     ): List<SearchResponse> {
-
         return search(query)
     }
 
@@ -439,170 +437,60 @@ class HdfilmcehennemiProvider : MainAPI() {
         query: String
     ): List<SearchResponse> {
 
-        val ajaxResponse =
-            app.post(
-                "$mainUrl/search/",
-                data = mapOf(
-                    "query" to query
-                ),
-                headers = mapOf(
-                    "User-Agent" to browserHeaders.getValue("User-Agent"),
-                    "Accept" to
-                        "application/json, text/javascript, */*; q=0.01",
-                    "Accept-Language" to
-                        browserHeaders.getValue("Accept-Language"),
-                    "X-Requested-With" to
-                        "XMLHttpRequest"
-                ),
-                referer = "$mainUrl/"
-            )
+        val normalizedQuery =
+            query
+                .trim()
+                .lowercase()
 
-        val ajaxResults =
-            ajaxResponse
-                .parsedSafe<Result>()
-                ?.result
-                ?.mapNotNull {
-                    it.toSearchResponse()
-                }
-                .orEmpty()
-
-        if (ajaxResults.isNotEmpty()) {
-
-            return ajaxResults
-                .distinctBy {
-                    it.url
-                }
+        if (normalizedQuery.isBlank()) {
+            return emptyList()
         }
 
-        /*
-         * AJAX sonuç vermezse HTML fallback.
-         */
-
-        val encodedQuery =
-            URLEncoder.encode(
-                query,
-                "UTF-8"
+        val searchPages =
+            listOf(
+                "$mainUrl/" to TvType.Movie,
+                "$mainUrl/category/tavsiye-filmler-izle3/" to TvType.Movie,
+                "$mainUrl/yabancidiziizle-5/" to TvType.TvSeries,
+                "$mainUrl/category/populer-diziler-2/" to TvType.TvSeries,
+                "$mainUrl/imdb-7-puan-uzeri-filmler-2/" to TvType.Movie,
+                "$mainUrl/en-cok-yorumlananlar-2/" to TvType.Movie,
+                "$mainUrl/en-cok-begenilen-filmleri-izle-4/" to TvType.Movie
             )
 
-        val document =
-            app.get(
-                "$mainUrl/?s=$encodedQuery",
-                headers = browserHeaders,
-                referer = "$mainUrl/"
-            ).document
+        val results =
+            mutableListOf<SearchResponse>()
 
-        return document
-            .select("a[href]")
-            .mapNotNull {
-                it.toCatalogResult(
-                    TvType.Movie
-                )
+        for ((pageUrl, defaultType) in searchPages) {
+
+            safeApiCall {
+
+                val document =
+                    app.get(
+                        pageUrl,
+                        headers = browserHeaders,
+                        referer = "$mainUrl/"
+                    ).document
+
+                document
+                    .select("a[href]")
+                    .mapNotNull {
+                        it.toCatalogResult(defaultType)
+                    }
+                    .filter {
+                        it.name
+                            .lowercase()
+                            .contains(normalizedQuery)
+                    }
+                    .forEach {
+                        results.add(it)
+                    }
             }
+        }
+
+        return results
             .distinctBy {
                 it.url
             }
-    }
-
-    private fun Media.toSearchResponse():
-        SearchResponse? {
-
-        val mediaTitle =
-            title
-                ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
-                ?: return null
-
-        val mediaSlug =
-            slug
-                ?.trim()
-                ?.trim('/')
-                ?.takeIf {
-                    it.isNotBlank()
-                }
-                ?: return null
-
-        val prefix =
-            slugPrefix
-                .orEmpty()
-                .trim()
-                .trim('/')
-
-        val path =
-            if (prefix.isBlank()) {
-                mediaSlug
-            } else {
-                "$prefix/$mediaSlug"
-            }
-
-        val url =
-            "$mainUrl/$path/"
-
-        val posterUrl =
-            poster
-                ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                }
-                ?.let { rawPoster ->
-
-                    when {
-
-                        rawPoster.startsWith(
-                            "http://",
-                            true
-                        ) ||
-                            rawPoster.startsWith(
-                                "https://",
-                                true
-                            ) ->
-                            rawPoster
-
-                        rawPoster.startsWith("/") ->
-                            fixUrlNull(
-                                rawPoster
-                            )
-
-                        else ->
-                            fixUrlNull(
-                                "/uploads/poster/$rawPoster"
-                            )
-                    }
-                }
-
-        val isSeries =
-            prefix.contains(
-                "dizi",
-                ignoreCase = true
-            ) ||
-                url.contains(
-                    "/dizi/",
-                    ignoreCase = true
-                )
-
-        return if (isSeries) {
-
-            newTvSeriesSearchResponse(
-                cleanTitle(mediaTitle),
-                url,
-                TvType.TvSeries
-            ) {
-                this.posterUrl =
-                    posterUrl
-            }
-
-        } else {
-
-            newMovieSearchResponse(
-                cleanTitle(mediaTitle),
-                url,
-                TvType.Movie
-            ) {
-                this.posterUrl =
-                    posterUrl
-            }
-        }
     }
 
     override suspend fun load(
@@ -922,8 +810,7 @@ class HdfilmcehennemiProvider : MainAPI() {
                 )
             )
 
-        var m3uLink:
-            String? = null
+        var m3uLink: String? = null
 
         for (pattern in patterns) {
 
@@ -1105,29 +992,4 @@ class HdfilmcehennemiProvider : MainAPI() {
 
         return true
     }
-
-    data class Result(
-        @JsonProperty("result")
-        val result:
-            ArrayList<Media>? =
-            arrayListOf()
-    )
-
-    data class Media(
-        @JsonProperty("title")
-        val title:
-            String? = null,
-
-        @JsonProperty("poster")
-        val poster:
-            String? = null,
-
-        @JsonProperty("slug")
-        val slug:
-            String? = null,
-
-        @JsonProperty("slug_prefix")
-        val slugPrefix:
-            String? = null
-    )
 }
