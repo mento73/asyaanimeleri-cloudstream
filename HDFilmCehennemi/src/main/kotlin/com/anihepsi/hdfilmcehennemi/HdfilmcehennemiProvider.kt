@@ -1,5 +1,6 @@
 package com.anihepsi.hdfilmcehennemi
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -129,17 +130,13 @@ class HdfilmcehennemiProvider : MainAPI() {
             return null
         }
 
-        /*
-         * Gerçek içerik sayfalarını mümkün olduğunca öne çıkar.
-         * Dizi URL'leri /dizi/... yapısında.
-         */
         val likelyContent =
             href.contains("/dizi/", true) ||
-            (
-                !href.contains("/category/", true) &&
-                !href.contains("/tur/", true) &&
-                !href.contains("/apk/", true)
-            )
+                (
+                    !href.contains("/category/", true) &&
+                        !href.contains("/tur/", true) &&
+                        !href.contains("/apk/", true)
+                    )
 
         if (!likelyContent) {
             return null
@@ -178,25 +175,40 @@ class HdfilmcehennemiProvider : MainAPI() {
                     TvType.Movie
             }
 
-        return when (detectedType) {
+        return createSearchResponse(
+            cleanTitle(title),
+            href,
+            poster,
+            detectedType
+        )
+    }
 
-            TvType.TvSeries ->
-                newTvSeriesSearchResponse(
-                    cleanTitle(title),
-                    href,
-                    TvType.TvSeries
-                ) {
-                    posterUrl = poster
-                }
+    private fun createSearchResponse(
+        title: String,
+        url: String,
+        poster: String?,
+        type: TvType
+    ): SearchResponse {
 
-            else ->
-                newMovieSearchResponse(
-                    cleanTitle(title),
-                    href,
-                    TvType.Movie
-                ) {
-                    posterUrl = poster
-                }
+        return if (type == TvType.TvSeries) {
+
+            newTvSeriesSearchResponse(
+                title,
+                url,
+                TvType.TvSeries
+            ) {
+                posterUrl = poster
+            }
+
+        } else {
+
+            newMovieSearchResponse(
+                title,
+                url,
+                TvType.Movie
+            ) {
+                posterUrl = poster
+            }
         }
     }
 
@@ -423,10 +435,16 @@ class HdfilmcehennemiProvider : MainAPI() {
             clean.contains("logo")
     }
 
+    /*
+     * SEARCH
+     *
+     * HDFilmCehennemi'nin AJAX araması.
+     * Hexated'in orijinal sağlayıcısında kullanılan yöntem budur.
+     */
+
     override suspend fun quickSearch(
         query: String
     ): List<SearchResponse> {
-
         return search(query)
     }
 
@@ -434,9 +452,45 @@ class HdfilmcehennemiProvider : MainAPI() {
         query: String
     ): List<SearchResponse> {
 
+        val ajaxResults =
+            safeApiCall {
+
+                app.post(
+                    "$mainUrl/search/",
+                    data = mapOf(
+                        "query" to query
+                    ),
+                    headers =
+                        browserHeaders +
+                            mapOf(
+                                "Accept" to
+                                    "application/json, text/javascript, */*; q=0.01",
+
+                                "Content-Type" to
+                                    "application/x-www-form-urlencoded; charset=UTF-8",
+
+                                "X-Requested-With" to
+                                    "XMLHttpRequest"
+                            ),
+                    referer = "$mainUrl/"
+                )
+                    .parsedSafe<SearchResult>()
+                    ?.result
+                    ?.mapNotNull {
+                        it.toSearchResponse()
+                    }
+                    .orEmpty()
+            }.orEmpty()
+
+        if (ajaxResults.isNotEmpty()) {
+            return ajaxResults
+                .distinctBy {
+                    it.url
+                }
+        }
+
         /*
-         * Eski JSON search endpoint'ine güvenmiyoruz.
-         * Güncel HTML arama sayfasını doğrudan parse ediyoruz.
+         * AJAX endpoint ileride değişirse HTML fallback.
          */
 
         val encodedQuery =
@@ -462,6 +516,99 @@ class HdfilmcehennemiProvider : MainAPI() {
             .distinctBy {
                 it.url
             }
+    }
+
+    private fun SearchMedia.toSearchResponse():
+        SearchResponse? {
+
+        val mediaTitle =
+            title
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?: return null
+
+        val mediaSlug =
+            slug
+                ?.trim()
+                ?.trim('/')
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?: return null
+
+        val prefix =
+            slugPrefix
+                .orEmpty()
+                .trim()
+                .trim('/')
+
+        val path =
+            listOf(
+                prefix,
+                mediaSlug
+            )
+                .filter {
+                    it.isNotBlank()
+                }
+                .joinToString("/")
+
+        val url =
+            "$mainUrl/$path/"
+
+        val posterUrl =
+            poster
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?.let {
+                    rawPoster ->
+
+                    when {
+                        rawPoster.startsWith(
+                            "http://",
+                            true
+                        ) ||
+                            rawPoster.startsWith(
+                                "https://",
+                                true
+                            ) ->
+                            rawPoster
+
+                        rawPoster.startsWith("/") ->
+                            fixUrlNull(
+                                rawPoster
+                            )
+
+                        else ->
+                            fixUrlNull(
+                                "/uploads/poster/$rawPoster"
+                            )
+                    }
+                }
+
+        val isSeries =
+            prefix.contains(
+                "dizi",
+                ignoreCase = true
+            ) ||
+                url.contains(
+                    "/dizi/",
+                    ignoreCase = true
+                )
+
+        return createSearchResponse(
+            cleanTitle(mediaTitle),
+            url,
+            posterUrl,
+            if (isSeries) {
+                TvType.TvSeries
+            } else {
+                TvType.Movie
+            }
+        )
     }
 
     override suspend fun load(
@@ -568,10 +715,6 @@ class HdfilmcehennemiProvider : MainAPI() {
                     )
                 }
 
-        /*
-         * Güncel dizi detay URL'leri /dizi/... şeklinde.
-         * Bu en güvenilir ayraç.
-         */
         val isSeries =
             url.contains(
                 "/dizi/",
@@ -583,10 +726,6 @@ class HdfilmcehennemiProvider : MainAPI() {
             val episodes =
                 mutableListOf<Episode>()
 
-            /*
-             * Güncel sitede bölüm URL'leri:
-             * /dizi/.../sezon-1/bolum-4-.../
-             */
             val episodeLinks =
                 document
                     .select(
@@ -969,4 +1108,29 @@ class HdfilmcehennemiProvider : MainAPI() {
 
         return true
     }
+
+    data class SearchResult(
+        @JsonProperty("result")
+        val result:
+            ArrayList<SearchMedia>? =
+            arrayListOf()
+    )
+
+    data class SearchMedia(
+        @JsonProperty("title")
+        val title:
+            String? = null,
+
+        @JsonProperty("poster")
+        val poster:
+            String? = null,
+
+        @JsonProperty("slug")
+        val slug:
+            String? = null,
+
+        @JsonProperty("slug_prefix")
+        val slugPrefix:
+            String? = null
+    )
 }
