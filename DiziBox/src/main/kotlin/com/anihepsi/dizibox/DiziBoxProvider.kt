@@ -12,8 +12,8 @@ import org.jsoup.nodes.Element
  * keyiflerolsun / Kekik-cloudstream
  * nikyokki / nik-cloudstream
  *
- * Player handling here only follows publicly exposed iframe URLs
- * and CloudStream's standard extractor flow.
+ * This provider only uses public HTML, openly exposed player/iframe URLs
+ * and CloudStream's standard extractor system.
  */
 
 class DiziBoxProvider : MainAPI() {
@@ -30,8 +30,8 @@ class DiziBoxProvider : MainAPI() {
     )
 
     /*
-     * DiziBox Android/mobile User-Agent ile eksik HTML döndürebiliyor.
-     * Bu nedenle desktop User-Agent kullanıyoruz.
+     * DiziBox mobil/Android User-Agent ile eksik HTML döndürebiliyor.
+     * Bu yüzden çalışan masaüstü User-Agent'ı korunuyor.
      */
     private val headers = mapOf(
         "User-Agent" to
@@ -175,7 +175,7 @@ class DiziBoxProvider : MainAPI() {
     }
 
     // -------------------------------------------------------------------------
-    // DİZİ DETAY / SEZONLAR / BÖLÜMLER
+    // DİZİ DETAY / SEZON / BÖLÜMLER
     // -------------------------------------------------------------------------
 
     override suspend fun load(
@@ -229,6 +229,9 @@ class DiziBoxProvider : MainAPI() {
                     it.first
                 }
 
+        /*
+         * Ana dizi sayfasında bölüm varsa önce onu al.
+         */
         collectEpisodesFromSeasonDocument(
             document = document,
             defaultSeason =
@@ -238,6 +241,9 @@ class DiziBoxProvider : MainAPI() {
             episodes = episodes
         )
 
+        /*
+         * Her sezon sayfasını sırayla oku.
+         */
         for ((seasonNumber, seasonUrl) in seasonLinks) {
 
             try {
@@ -256,9 +262,13 @@ class DiziBoxProvider : MainAPI() {
                 )
 
             } catch (_: Exception) {
+                // Bir sezon hata verirse diğerlerine devam et.
             }
         }
 
+        /*
+         * Sezon listesi olmayan sayfalarda fallback.
+         */
         if (
             seasonLinks.isEmpty() &&
             episodes.isEmpty()
@@ -314,6 +324,9 @@ class DiziBoxProvider : MainAPI() {
         val episodeBase =
             data.trimEnd('/')
 
+        /*
+         * Ana bölüm sayfasını al.
+         */
         val mainDocument =
             try {
 
@@ -328,7 +341,7 @@ class DiziBoxProvider : MainAPI() {
             }
 
         /*
-         * DiziBox player yolları:
+         * DiziBox'taki bilinen player sayfaları:
          *
          * ana bölüm = DBX Pro
          * /2/       = Moly+
@@ -342,8 +355,10 @@ class DiziBoxProvider : MainAPI() {
             )
 
         /*
-         * Sayfadaki player seçim menüsünden
-         * açık URL'leri de topla.
+         * Player seçim menüsünde açıkça verilen URL'leri de ekle.
+         *
+         * Böylece ileride /2/ veya /3/ yapısı değişirse,
+         * HTML'deki gerçek bağlantı kullanılabilir.
          */
         mainDocument
             ?.select(
@@ -362,7 +377,10 @@ class DiziBoxProvider : MainAPI() {
 
                     fixUrlNull(candidate)
                         ?.let { playerUrl ->
-                            playerPages.add(playerUrl)
+
+                            playerPages.add(
+                                playerUrl
+                            )
                         }
                 }
             }
@@ -372,6 +390,9 @@ class DiziBoxProvider : MainAPI() {
 
         var foundLink = false
 
+        /*
+         * DBX Pro, Moly+ ve Odnok sayfalarını sırayla kontrol ediyoruz.
+         */
         for (playerPage in uniquePlayerPages) {
 
             try {
@@ -383,6 +404,9 @@ class DiziBoxProvider : MainAPI() {
                         referer = "$episodeBase/"
                     ).document
 
+                /*
+                 * Yalnızca sayfanın açıkça sunduğu iframe'leri al.
+                 */
                 val iframeElements =
                     document.select(
                         "#video-area iframe[src]"
@@ -396,81 +420,12 @@ class DiziBoxProvider : MainAPI() {
                         )
                             ?: continue
 
-                    // ---------------------------------------------------------
-                    // DBX PRO / KING.PHP
-                    // ---------------------------------------------------------
-
-                    if (
-                        iframeUrl.contains(
-                            "/player/king/king.php"
-                        )
-                    ) {
-
-                        try {
-
-                            /*
-                             * king.php sayfasını doğru bölüm/player
-                             * sayfasını Referer olarak vererek açıyoruz.
-                             *
-                             * Gizli stream veya token çözümü yok.
-                             */
-                            val kingResponse =
-                                app.get(
-                                    iframeUrl,
-                                    headers = headers,
-                                    referer = playerPage
-                                )
-
-                            val kingDocument =
-                                kingResponse.document
-
-                            /*
-                             * king.php HTML'inde açıkça bulunan
-                             * ikinci iframe varsa onu CloudStream'ın
-                             * standart extractor sistemine ver.
-                             */
-                            val nestedIframes =
-                                kingDocument
-                                    .select(
-                                        "iframe[src]"
-                                    )
-
-                            for (nestedIframe in nestedIframes) {
-
-                                val nestedUrl =
-                                    fixUrlNull(
-                                        nestedIframe.attr(
-                                            "src"
-                                        )
-                                    )
-                                        ?: continue
-
-                                try {
-
-                                    val loaded =
-                                        loadExtractor(
-                                            nestedUrl,
-                                            iframeUrl,
-                                            subtitleCallback,
-                                            callback
-                                        )
-
-                                    if (loaded) {
-                                        foundLink = true
-                                    }
-
-                                } catch (_: Exception) {
-                                }
-                            }
-
-                        } catch (_: Exception) {
-                        }
-                    }
-
-                    // ---------------------------------------------------------
-                    // MOLY / ODNOK / DİĞER AÇIK IFRAME
-                    // ---------------------------------------------------------
-
+                    /*
+                     * Burada DBX / Moly / Odnok'a özel gizli çözüm yok.
+                     *
+                     * Açık iframe URL'sini doğrudan CloudStream'ın
+                     * standart extractor sistemine veriyoruz.
+                     */
                     try {
 
                         val loaded =
@@ -497,7 +452,7 @@ class DiziBoxProvider : MainAPI() {
     }
 
     // -------------------------------------------------------------------------
-    // SEARCH RESULT HELPER
+    // ARŞİV KARTI
     // -------------------------------------------------------------------------
 
     private fun Element.toSearchResult():
@@ -521,11 +476,7 @@ class DiziBoxProvider : MainAPI() {
             )
                 ?: return null
 
-        if (
-            !href.contains(
-                "/diziler/"
-            )
-        ) {
+        if (!href.contains("/diziler/")) {
             return null
         }
 
@@ -564,7 +515,7 @@ class DiziBoxProvider : MainAPI() {
     }
 
     // -------------------------------------------------------------------------
-    // IMAGE
+    // RESİM
     // -------------------------------------------------------------------------
 
     private fun getImageUrl(
@@ -587,7 +538,7 @@ class DiziBoxProvider : MainAPI() {
                 value.isBlank() ||
                 value.startsWith(
                     "data:image",
-                    true
+                    ignoreCase = true
                 )
             ) {
                 continue
@@ -600,7 +551,7 @@ class DiziBoxProvider : MainAPI() {
     }
 
     // -------------------------------------------------------------------------
-    // TITLE
+    // DİZİ ADI
     // -------------------------------------------------------------------------
 
     private fun getSeriesTitle(
