@@ -1,6 +1,8 @@
 package com.anihepsi.dizibox
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -11,14 +13,14 @@ import org.jsoup.nodes.Element
  * keyiflerolsun / Kekik-cloudstream
  * nikyokki / nik-cloudstream
  *
- * This provider handles publicly visible catalogue metadata only:
- * - series archive
- * - search
- * - series metadata
- * - seasons
- * - episode listings
+ * This implementation uses:
+ * - publicly visible catalogue HTML
+ * - publicly exposed episode/player pages
+ * - publicly exposed iframe URLs
+ * - CloudStream's existing extractor system
  *
- * Player/media extraction is intentionally not implemented here.
+ * No custom stream decryption or protected-media extraction
+ * is implemented here.
  */
 
 class DiziBoxProvider : MainAPI() {
@@ -29,22 +31,19 @@ class DiziBoxProvider : MainAPI() {
 
     override val hasMainPage = true
     override val hasQuickSearch = true
-    override val hasDownloadSupport = false
+    override val hasDownloadSupport = true
 
     override val supportedTypes = setOf(
         TvType.TvSeries
     )
 
-    /*
-     * Tek CloudStream dizini.
-     */
     override val mainPage = mainPageOf(
         "$mainUrl/dizi-arsivi/" to "Tüm Diziler"
     )
 
     /*
-     * DiziBox mobil User-Agent ile eksik HTML döndürdüğü için
-     * masaüstü User-Agent kullanıyoruz.
+     * DiziBox mobile User-Agent ile eksik HTML döndürdüğü için
+     * desktop User-Agent kullanıyoruz.
      */
     private val headers = mapOf(
         "User-Agent" to
@@ -81,11 +80,12 @@ class DiziBoxProvider : MainAPI() {
                 "${request.data.trimEnd('/')}/page/$page/"
             }
 
-        val document = app.get(
-            url,
-            headers = headers,
-            referer = "$mainUrl/"
-        ).document
+        val document =
+            app.get(
+                url,
+                headers = headers,
+                referer = "$mainUrl/"
+            ).document
 
         val results =
             document
@@ -114,11 +114,8 @@ class DiziBoxProvider : MainAPI() {
      * ARAMA
      * ============================================================
      *
-     * DiziBox'ın kendi ?s= araması CloudStream tarafında
-     * tutarlı sonuç vermediği için alfabetik arşivi kullanıyoruz.
-     *
-     * CloudStream ile testte bu sayfadan 4711 dizi bağlantısı
-     * okunabildi.
+     * DiziBox'ın kendi arama endpoint'i CloudStream tarafında
+     * tutarlı olmadığı için alfabetik arşiv kullanılıyor.
      */
 
     override suspend fun quickSearch(
@@ -131,7 +128,8 @@ class DiziBoxProvider : MainAPI() {
         query: String
     ): List<SearchResponse> {
 
-        val cleanQuery = query.trim()
+        val cleanQuery =
+            query.trim()
 
         if (cleanQuery.isBlank()) {
             return emptyList()
@@ -255,7 +253,7 @@ class DiziBoxProvider : MainAPI() {
 
     /*
      * ============================================================
-     * RESİMLER
+     * RESİM
      * ============================================================
      */
 
@@ -263,15 +261,17 @@ class DiziBoxProvider : MainAPI() {
         image: Element
     ): String? {
 
-        val candidates = listOf(
-            image.attr("data-src"),
-            image.attr("data-lazy-src"),
-            image.attr("src")
-        )
+        val candidates =
+            listOf(
+                image.attr("data-src"),
+                image.attr("data-lazy-src"),
+                image.attr("src")
+            )
 
         for (candidate in candidates) {
 
-            val value = candidate.trim()
+            val value =
+                candidate.trim()
 
             if (
                 value.isBlank() ||
@@ -319,9 +319,6 @@ class DiziBoxProvider : MainAPI() {
         val episodes =
             mutableListOf<Episode>()
 
-        /*
-         * Sezon bağlantıları.
-         */
         val seasonLinks =
             document
                 .select("#seasons-list a[href]")
@@ -350,7 +347,7 @@ class DiziBoxProvider : MainAPI() {
                 }
 
         /*
-         * Ana sayfanın içinde bölüm varsa önce onları al.
+         * Ana sayfadaki bölümleri al.
          */
         collectEpisodesFromSeasonDocument(
             document = document,
@@ -361,10 +358,6 @@ class DiziBoxProvider : MainAPI() {
 
         /*
          * Sezon sayfalarını tara.
-         *
-         * Not:
-         * DiziBox'ın yapısı gereği bazı dizilerde bölümlerin tamamı
-         * ancak sezon sayfaları açıldığında geliyor.
          */
         for (
             (seasonNumber, seasonUrl)
@@ -387,17 +380,9 @@ class DiziBoxProvider : MainAPI() {
                 )
 
             } catch (_: Exception) {
-                /*
-                 * Tek bir sezon hata verirse diğer sezonları
-                 * göstermeye devam et.
-                 */
             }
         }
 
-        /*
-         * Eğer sezon bağlantısı yoksa mevcut sayfadan
-         * sezon numarası çıkarmayı dene.
-         */
         if (
             seasonLinks.isEmpty() &&
             episodes.isEmpty()
@@ -445,7 +430,7 @@ class DiziBoxProvider : MainAPI() {
 
     /*
      * ============================================================
-     * DİZİ BAŞLIĞI
+     * BAŞLIK
      * ============================================================
      */
 
@@ -694,17 +679,20 @@ class DiziBoxProvider : MainAPI() {
      * PLAYER
      * ============================================================
      *
-     * DiziBox bölüm HTML'sinde:
+     * DiziBox'ın bölüm sayfasında açıkça sunduğu player sayfaları
+     * kullanılıyor.
      *
-     * Ana sayfa = DBX Pro
-     * /2/       = Moly+
-     * /3/       = Odnok
+     * Ana bölüm:
+     * DBX Pro
      *
-     * seçenekleri görünür durumda.
+     * /2/:
+     * Moly+
      *
-     * Ancak üçüncü taraf video servislerinden gerçek medya
-     * akışlarının çıkarılması bu provider'da bilinçli olarak
-     * uygulanmıyor.
+     * /3/:
+     * Odnok
+     *
+     * Burada yalnızca HTML içinde açıkça verilen iframe URL'leri
+     * CloudStream'ın mevcut extractor sistemine gönderiliyor.
      */
 
     override suspend fun loadLinks(
@@ -713,9 +701,132 @@ class DiziBoxProvider : MainAPI() {
         subtitleCallback:
             (SubtitleFile) -> Unit,
         callback:
-            (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit
+            (ExtractorLink) -> Unit
     ): Boolean {
 
-        return false
+        val episodeBase =
+            data.trimEnd('/')
+
+        /*
+         * Önce ana bölüm sayfasını açıyoruz.
+         *
+         * Buradaki select menüsünden gerçek player sayfalarını
+         * okumayı deniyoruz.
+         */
+        val mainDocument =
+            try {
+
+                app.get(
+                    "$episodeBase/",
+                    headers = headers,
+                    referer = "$mainUrl/"
+                ).document
+
+            } catch (_: Exception) {
+
+                null
+            }
+
+        /*
+         * Sabit fallback yolları.
+         */
+        val playerPages =
+            mutableListOf(
+                "$episodeBase/",
+                "$episodeBase/2/",
+                "$episodeBase/3/"
+            )
+
+        /*
+         * DiziBox'ın select menüsünde verdiği gerçek player
+         * sayfalarını da ekle.
+         *
+         * Böylece ileride /2/ veya /3/ değişirse mümkün olduğunca
+         * HTML'deki gerçek bağlantıyı kullanırız.
+         */
+        mainDocument
+            ?.select(
+                "select.woca-linkpages-dd option"
+            )
+            ?.forEach { option ->
+
+                val candidate =
+                    option.attr("value")
+                        .ifBlank {
+                            option.attr("href")
+                        }
+                        .trim()
+
+                if (candidate.isNotBlank()) {
+
+                    fixUrlNull(candidate)
+                        ?.let {
+                            playerPages.add(it)
+                        }
+                }
+            }
+
+        /*
+         * Aynı URL'yi tekrar denememek için temizle.
+         */
+        val uniquePlayerPages =
+            playerPages
+                .distinct()
+
+        var foundAnyIframe = false
+
+        /*
+         * Her player sayfasındaki public iframe'i bul ve
+         * CloudStream'ın mevcut extractor mekanizmasına gönder.
+         */
+        for (playerPage in uniquePlayerPages) {
+
+            try {
+
+                val document =
+                    app.get(
+                        playerPage,
+                        headers = headers,
+                        referer = "$episodeBase/"
+                    ).document
+
+                val iframeElements =
+                    document.select(
+                        "#video-area iframe[src]"
+                    )
+
+                for (iframe in iframeElements) {
+
+                    val iframeUrl =
+                        fixUrlNull(
+                            iframe.attr("src")
+                        )
+                            ?: continue
+
+                    foundAnyIframe = true
+
+                    try {
+
+                        loadExtractor(
+                            iframeUrl,
+                            playerPage,
+                            subtitleCallback,
+                            callback
+                        )
+
+                    } catch (_: Exception) {
+                    }
+                }
+
+            } catch (_: Exception) {
+            }
+        }
+
+        /*
+         * true dönmek iframe bulunduğunu gösterir.
+         * Extractor gerçek video üretmezse CloudStream yine
+         * "bağlantı bulunamadı" diyebilir.
+         */
+        return foundAnyIframe
     }
 }
