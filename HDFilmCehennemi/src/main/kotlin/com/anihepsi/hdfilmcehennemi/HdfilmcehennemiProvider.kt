@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.mvvm.safeApiCall
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.net.URLEncoder
 
 /*
  * Original Hdfilmcehennemi implementation:
@@ -35,10 +36,13 @@ class HdfilmcehennemiProvider : MainAPI() {
         "User-Agent" to
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+
         "Accept" to
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif," +
-            "image/webp,*/*;q=0.8",
-        "Accept-Language" to "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+            "text/html,application/xhtml+xml,application/xml;q=0.9," +
+            "image/avif,image/webp,*/*;q=0.8",
+
+        "Accept-Language" to
+            "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     )
 
     override val mainPage = mainPageOf(
@@ -55,23 +59,22 @@ class HdfilmcehennemiProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
 
-        val pageUrl = when {
-            page <= 1 -> request.data
+        val pageUrl =
+            if (page <= 1) {
+                request.data
+            } else {
+                request.data
+                    .trimEnd('/') + "/page/$page/"
+            }
 
-            request.data == "$mainUrl/" ->
-                "${request.data}page/$page/"
+        val document =
+            app.get(
+                pageUrl,
+                headers = browserHeaders,
+                referer = "$mainUrl/"
+            ).document
 
-            else ->
-                request.data.trimEnd('/') + "/page/$page/"
-        }
-
-        val document = app.get(
-            pageUrl,
-            headers = browserHeaders,
-            referer = "$mainUrl/"
-        ).document
-
-        val requestedType =
+        val defaultType =
             if (
                 request.name.contains(
                     "Dizi",
@@ -84,45 +87,24 @@ class HdfilmcehennemiProvider : MainAPI() {
             }
 
         /*
-         * Güncel sitede kart class'ları zaman zaman değişiyor.
-         * Bu nedenle yalnızca "poster-container" gibi tek bir selector'a
-         * bağlı kalmıyoruz.
+         * Artık önce "strict card" aramıyoruz.
          *
-         * Önce olası kart yapıları deneniyor.
-         * Sonuç alınamazsa resim içeren linklerden içerik kartı çıkarılıyor.
+         * Sayfadaki tüm resimli içerik linklerini tarıyoruz.
+         * Ardından kategori, menü, reklam, sosyal medya vb.
+         * bağlantıları filtreliyoruz.
          */
 
-        val strictCards = document.select(
-            """
-            div.poster-container,
-            div.poster,
-            div.movie,
-            div.movie-item,
-            div.card-list-item,
-            div[class*=poster],
-            article
-            """.trimIndent()
-        )
-
-        var results = strictCards
-            .mapNotNull {
-                it.toCatalogResult(requestedType)
-            }
-            .distinctBy {
-                it.url
-            }
-
-        if (results.isEmpty()) {
-
-            results = document
+        val results =
+            document
                 .select("a[href]")
                 .mapNotNull {
-                    it.anchorToCatalogResult(requestedType)
+                    it.toCatalogResult(
+                        defaultType
+                    )
                 }
                 .distinctBy {
                     it.url
                 }
-        }
 
         return newHomePageResponse(
             request.name,
@@ -134,31 +116,26 @@ class HdfilmcehennemiProvider : MainAPI() {
         defaultType: TvType
     ): SearchResponse? {
 
-        val anchor =
-            if (tagName() == "a") {
-                this
-            } else {
-                selectFirst("a[href]")
-            }
-                ?: return null
-
-        return anchor.anchorToCatalogResult(
-            defaultType
-        )
-    }
-
-    private fun Element.anchorToCatalogResult(
-        defaultType: TvType
-    ): SearchResponse? {
-
         val rawHref =
             attr("href")
                 .trim()
 
         if (
             rawHref.isBlank() ||
-            rawHref.startsWith("#") ||
-            rawHref.startsWith("javascript:", true)
+            rawHref == "/" ||
+            rawHref == "#" ||
+            rawHref.startsWith(
+                "javascript:",
+                ignoreCase = true
+            ) ||
+            rawHref.startsWith(
+                "mailto:",
+                ignoreCase = true
+            ) ||
+            rawHref.startsWith(
+                "tel:",
+                ignoreCase = true
+            )
         ) {
             return null
         }
@@ -169,117 +146,63 @@ class HdfilmcehennemiProvider : MainAPI() {
             )
                 ?: return null
 
-        if (!href.startsWith(mainUrl)) {
-            return null
-        }
-
-        val lowerHref =
-            href.lowercase()
-
         if (
-            lowerHref == mainUrl.lowercase() ||
-            lowerHref == "$mainUrl/".lowercase() ||
-            lowerHref.contains("/category/") ||
-            lowerHref.contains("/tag/") ||
-            lowerHref.contains("/author/") ||
-            lowerHref.contains("/page/") ||
-            lowerHref.contains("/iletisim") ||
-            lowerHref.contains("/yardim") ||
-            lowerHref.contains("/film-istek") ||
-            lowerHref.contains("/film-robot")
+            !href.startsWith(
+                mainUrl
+            )
         ) {
             return null
         }
+
+        if (
+            isIgnoredUrl(
+                href
+            )
+        ) {
+            return null
+        }
+
+        /*
+         * Kartın resmi bazen <a> içinde,
+         * bazen parent/container tarafında olabiliyor.
+         */
 
         val image =
             selectFirst("img")
                 ?: parent()
                     ?.selectFirst("img")
+                ?: parent()
+                    ?.parent()
+                    ?.selectFirst("img")
                 ?: return null
 
         val poster =
-            getImageUrl(
+            extractImage(
                 image
             )
-
-        if (poster.isNullOrBlank()) {
-            return null
-        }
-
-        val imageAlt =
-            image.attr("alt")
-                .trim()
-
-        val anchorTitle =
-            attr("title")
-                .trim()
-
-        val childTitle =
-            selectFirst(
-                "h1, h2, h3, h4, .title, .name"
-            )
-                ?.text()
-                ?.trim()
-                .orEmpty()
-
-        val parentTitle =
-            parent()
-                ?.selectFirst(
-                    "h1, h2, h3, h4, .title, .name"
-                )
-                ?.text()
-                ?.trim()
-                .orEmpty()
-
-        val linkText =
-            text()
-                .trim()
+                ?: return null
 
         val title =
-            sequenceOf(
-                imageAlt,
-                anchorTitle,
-                childTitle,
-                parentTitle,
-                linkText
+            extractTitle(
+                this,
+                image
             )
-                .firstOrNull {
-                    it.isNotBlank()
-                }
-                ?.replace(
-                    Regex("""\s+"""),
-                    " "
-                )
-                ?.trim()
                 ?: return null
 
         if (
-            title.length < 2 ||
-            title.equals(
-                "HDFilmCehennemi",
-                ignoreCase = true
-            ) ||
-            title.contains(
-                "logo",
-                ignoreCase = true
+            isIgnoredTitle(
+                title
             )
         ) {
             return null
         }
 
         val detectedType =
-            when {
-
-                lowerHref.contains("/dizi/") ||
-                    title.contains(
-                        "Yabancı Dizi",
-                        ignoreCase = true
-                    ) ->
-                    TvType.TvSeries
-
-                else ->
-                    defaultType
-            }
+            detectType(
+                href,
+                title,
+                defaultType
+            )
 
         return when (
             detectedType
@@ -307,33 +230,92 @@ class HdfilmcehennemiProvider : MainAPI() {
         }
     }
 
-    private fun getImageUrl(
-        image: Element?
+    private fun extractTitle(
+        anchor: Element,
+        image: Element
     ): String? {
-
-        if (image == null) {
-            return null
-        }
 
         val candidates =
             listOf(
-                image.attr("data-src"),
-                image.attr("data-lazy-src"),
-                image.attr("data-original"),
-                image.attr("src")
+                image.attr("alt"),
+                image.attr("title"),
+                anchor.attr("title"),
+
+                anchor
+                    .selectFirst(
+                        "h1, h2, h3, h4, .title, .name"
+                    )
+                    ?.text(),
+
+                anchor
+                    .parent()
+                    ?.selectFirst(
+                        "h1, h2, h3, h4, .title, .name"
+                    )
+                    ?.text(),
+
+                anchor
+                    .parent()
+                    ?.parent()
+                    ?.selectFirst(
+                        "h1, h2, h3, h4, .title, .name"
+                    )
+                    ?.text(),
+
+                anchor.text()
+            )
+
+        return candidates
+            .mapNotNull {
+                it
+                    ?.trim()
+                    ?.replace(
+                        Regex("""\s+"""),
+                        " "
+                    )
+                    ?.takeIf {
+                        text ->
+                        text.isNotBlank()
+                    }
+            }
+            .firstOrNull()
+    }
+
+    private fun extractImage(
+        image: Element
+    ): String? {
+
+        val candidates =
+            listOf(
+                image.attr(
+                    "data-src"
+                ),
+                image.attr(
+                    "data-lazy-src"
+                ),
+                image.attr(
+                    "data-original"
+                ),
+                image.attr(
+                    "data-srcset"
+                )
+                    .substringBefore(" "),
+                image.attr(
+                    "src"
+                )
             )
 
         for (
             candidate in candidates
         ) {
 
-            val clean =
+            val value =
                 candidate
                     .trim()
 
             if (
-                clean.isBlank() ||
-                clean.startsWith(
+                value.isBlank() ||
+                value.startsWith(
                     "data:image",
                     ignoreCase = true
                 )
@@ -341,28 +323,48 @@ class HdfilmcehennemiProvider : MainAPI() {
                 continue
             }
 
-            return fixUrlNull(
-                clean
-            )
+            val cleanValue =
+                value
+                    .substringBefore(",")
+                    .trim()
+                    .substringBefore(" ")
+                    .trim()
+
+            val fixed =
+                fixUrlNull(
+                    cleanValue
+                )
+
+            if (
+                !fixed.isNullOrBlank()
+            ) {
+                return fixed
+            }
         }
 
-        val srcSet =
-            image.attr(
-                "srcset"
-            )
+        val srcset =
+            image
+                .attr(
+                    "srcset"
+                )
                 .trim()
 
-        if (srcSet.isNotBlank()) {
+        if (
+            srcset.isNotBlank()
+        ) {
 
             val first =
-                srcSet
+                srcset
                     .split(",")
                     .firstOrNull()
                     ?.trim()
                     ?.substringBefore(" ")
                     ?.trim()
 
-            if (!first.isNullOrBlank()) {
+            if (
+                !first.isNullOrBlank()
+            ) {
+
                 return fixUrlNull(
                     first
                 )
@@ -370,6 +372,145 @@ class HdfilmcehennemiProvider : MainAPI() {
         }
 
         return null
+    }
+
+    private fun isIgnoredUrl(
+        url: String
+    ): Boolean {
+
+        val lower =
+            url
+                .lowercase()
+                .substringBefore("#")
+
+        if (
+            lower == mainUrl.lowercase() ||
+            lower == "$mainUrl/".lowercase()
+        ) {
+            return true
+        }
+
+        val ignoredParts =
+            listOf(
+                "/category/",
+                "/kategori/",
+                "/tag/",
+                "/etiket/",
+                "/author/",
+                "/page/",
+                "/feed/",
+                "/wp-content/",
+                "/wp-admin/",
+                "/wp-login",
+                "/search/",
+                "/ara/",
+                "/iletisim",
+                "/hakkimizda",
+                "/gizlilik",
+                "/dmca",
+                "/sss",
+                "/yardim",
+                "/film-istek",
+                "/film-robot",
+                "/reklam",
+                "/facebook",
+                "/twitter",
+                "/instagram",
+                "/telegram"
+            )
+
+        return ignoredParts
+            .any {
+                lower.contains(
+                    it
+                )
+            }
+    }
+
+    private fun isIgnoredTitle(
+        title: String
+    ): Boolean {
+
+        val clean =
+            title
+                .trim()
+                .lowercase()
+
+        if (
+            clean.length < 2
+        ) {
+            return true
+        }
+
+        val ignoredTitles =
+            listOf(
+                "hdfilmcehennemi",
+                "ana sayfa",
+                "anasayfa",
+                "filmler",
+                "diziler",
+                "kategoriler",
+                "türler",
+                "turler",
+                "arama",
+                "ara",
+                "giriş",
+                "giris",
+                "üye ol",
+                "uye ol",
+                "facebook",
+                "twitter",
+                "instagram",
+                "telegram",
+                "reklam"
+            )
+
+        if (
+            ignoredTitles.any {
+                clean == it
+            }
+        ) {
+            return true
+        }
+
+        if (
+            clean.contains(
+                "logo"
+            )
+        ) {
+            return true
+        }
+
+        return false
+    }
+
+    private fun detectType(
+        url: String,
+        title: String,
+        defaultType: TvType
+    ): TvType {
+
+        val lowerUrl =
+            url.lowercase()
+
+        val lowerTitle =
+            title.lowercase()
+
+        if (
+            lowerUrl.contains(
+                "/dizi/"
+            ) ||
+            lowerUrl.contains(
+                "dizi-izle"
+            ) ||
+            lowerTitle.contains(
+                "dizi"
+            )
+        ) {
+            return TvType.TvSeries
+        }
+
+        return defaultType
     }
 
     private fun Media.toSearchResponse():
@@ -412,7 +553,9 @@ class HdfilmcehennemiProvider : MainAPI() {
                 TvType.Movie
             }
 
-        return when (type) {
+        return when (
+            type
+        ) {
 
             TvType.TvSeries ->
                 newTvSeriesSearchResponse(
@@ -476,25 +619,31 @@ class HdfilmcehennemiProvider : MainAPI() {
                 }
                 .orEmpty()
 
-        if (jsonResults.isNotEmpty()) {
+        if (
+            jsonResults.isNotEmpty()
+        ) {
             return jsonResults
         }
 
-        /*
-         * Arama endpoint'i değişmişse en azından HTML fallback deniyoruz.
-         */
+        val encodedQuery =
+            URLEncoder.encode(
+                query,
+                "UTF-8"
+            )
 
-        val htmlDocument =
+        val document =
             app.get(
-                "$mainUrl/?s=$query",
+                "$mainUrl/?s=$encodedQuery",
                 headers = browserHeaders,
                 referer = "$mainUrl/"
             ).document
 
-        return htmlDocument
-            .select("a[href]")
+        return document
+            .select(
+                "a[href]"
+            )
             .mapNotNull {
-                it.anchorToCatalogResult(
+                it.toCatalogResult(
                     TvType.Movie
                 )
             }
@@ -517,18 +666,35 @@ class HdfilmcehennemiProvider : MainAPI() {
         val title =
             document
                 .selectFirst(
-                    "h1, div.card-header > h1, div.card-header > h2"
+                    """
+                    h1,
+                    div.card-header > h1,
+                    div.card-header > h2,
+                    .film-title,
+                    .movie-title,
+                    .entry-title
+                    """.trimIndent()
                 )
                 ?.text()
                 ?.trim()
                 ?: return null
 
         val poster =
-            getImageUrl(
-                document.selectFirst(
-                    "img.img-fluid, .poster img, article img"
+            document
+                .selectFirst(
+                    """
+                    img.img-fluid,
+                    .poster img,
+                    article img,
+                    .film-poster img,
+                    .movie-poster img
+                    """.trimIndent()
                 )
-            )
+                ?.let {
+                    extractImage(
+                        it
+                    )
+                }
 
         val description =
             document
@@ -538,7 +704,8 @@ class HdfilmcehennemiProvider : MainAPI() {
                     article p,
                     .description,
                     .film-ozeti,
-                    .summary
+                    .summary,
+                    .entry-content p
                     """.trimIndent()
                 )
                 ?.text()
@@ -550,6 +717,7 @@ class HdfilmcehennemiProvider : MainAPI() {
                     """
                     div.mb-0.lh-lg a,
                     a[href*=kategori],
+                    a[href*=category],
                     a[href*=tur]
                     """.trimIndent()
                 )
@@ -591,11 +759,15 @@ class HdfilmcehennemiProvider : MainAPI() {
 
                     Actor(
                         actorName,
-                        getImageUrl(
-                            it.selectFirst(
-                                "img"
-                            )
+                        it.selectFirst(
+                            "img"
                         )
+                            ?.let {
+                                img ->
+                                extractImage(
+                                    img
+                                )
+                            }
                     )
                 }
 
@@ -606,21 +778,32 @@ class HdfilmcehennemiProvider : MainAPI() {
             ) ||
                 document
                     .select(
-                        "#seasonsTabs, nav#seasonsTabs, [id*=season], [id*=sezon]"
+                        """
+                        #seasonsTabs,
+                        nav#seasonsTabs,
+                        [id*=season],
+                        [id*=sezon]
+                        """.trimIndent()
                     )
                     .isNotEmpty() ||
-                document.text()
-                    .contains(
-                        "Sezon",
-                        ignoreCase = true
-                    ) &&
-                document.text()
-                    .contains(
-                        "Bölüm",
-                        ignoreCase = true
+                (
+                    document
+                        .text()
+                        .contains(
+                            "Sezon",
+                            ignoreCase = true
+                        ) &&
+                        document
+                            .text()
+                            .contains(
+                                "Bölüm",
+                                ignoreCase = true
+                            )
                     )
 
-        if (isSeries) {
+        if (
+            isSeries
+        ) {
 
             val episodes =
                 mutableListOf<Episode>()
@@ -629,9 +812,11 @@ class HdfilmcehennemiProvider : MainAPI() {
                 document
                     .select(
                         """
+                        #seasonsTabs-tabContent a[href],
                         a[href*="/sezon-"],
                         a[href*="/bolum-"],
-                        a[href*="/dizi/"][href*="/sezon-"]
+                        a[href*="sezon"],
+                        a[href*="bolum"]
                         """.trimIndent()
                     )
                     .distinctBy {
@@ -652,9 +837,26 @@ class HdfilmcehennemiProvider : MainAPI() {
                     )
                         ?: continue
 
+                if (
+                    isIgnoredUrl(
+                        href
+                    )
+                ) {
+                    continue
+                }
+
                 val rawName =
-                    element.text()
-                        .trim()
+                    element
+                        .selectFirst(
+                            "h1, h2, h3, h4, .title"
+                        )
+                        ?.text()
+                        ?.trim()
+                        .orEmpty()
+                        .ifBlank {
+                            element.text()
+                                .trim()
+                        }
                         .ifBlank {
                             element.parent()
                                 ?.text()
@@ -664,14 +866,16 @@ class HdfilmcehennemiProvider : MainAPI() {
 
                 val season =
                     Regex(
-                        """sezon[-\s]*(\d+)""",
+                        """sezon[-\s_/]*(\d+)""",
                         RegexOption.IGNORE_CASE
                     )
                         .find(
-                            href
+                            "$href $rawName"
                         )
                         ?.groupValues
-                        ?.getOrNull(1)
+                        ?.getOrNull(
+                            1
+                        )
                         ?.toIntOrNull()
                         ?: Regex(
                             """(\d+)\.?\s*Sezon""",
@@ -681,19 +885,23 @@ class HdfilmcehennemiProvider : MainAPI() {
                                 rawName
                             )
                             ?.groupValues
-                            ?.getOrNull(1)
+                            ?.getOrNull(
+                                1
+                            )
                             ?.toIntOrNull()
 
                 val episode =
                     Regex(
-                        """bolum[-\s]*(\d+)""",
+                        """(?:bolum|bölüm)[-\s_/]*(\d+)""",
                         RegexOption.IGNORE_CASE
                     )
                         .find(
-                            href
+                            "$href $rawName"
                         )
                         ?.groupValues
-                        ?.getOrNull(1)
+                        ?.getOrNull(
+                            1
+                        )
                         ?.toIntOrNull()
                         ?: Regex(
                             """(\d+)\.?\s*Bölüm""",
@@ -703,31 +911,31 @@ class HdfilmcehennemiProvider : MainAPI() {
                                 rawName
                             )
                             ?.groupValues
-                            ?.getOrNull(1)
+                            ?.getOrNull(
+                                1
+                            )
                             ?.toIntOrNull()
 
                 episodes.add(
                     newEpisode(
                         href
                     ) {
+
                         name =
                             rawName
                                 .ifBlank {
-                                    buildString {
 
-                                        if (season != null) {
-                                            append(
-                                                "$season. Sezon "
-                                            )
-                                        }
+                                    when {
+                                        season != null &&
+                                            episode != null ->
+                                            "$season. Sezon $episode. Bölüm"
 
-                                        if (episode != null) {
-                                            append(
-                                                "$episode. Bölüm"
-                                            )
-                                        }
+                                        episode != null ->
+                                            "$episode. Bölüm"
+
+                                        else ->
+                                            title
                                     }
-                                        .trim()
                                 }
 
                         this.season =
@@ -747,6 +955,7 @@ class HdfilmcehennemiProvider : MainAPI() {
                     ?.attr(
                         "data-trailer"
                     )
+                    ?.trim()
                     ?.takeIf {
                         it.isNotBlank()
                     }
@@ -755,9 +964,10 @@ class HdfilmcehennemiProvider : MainAPI() {
                 title,
                 url,
                 TvType.TvSeries,
-                episodes.distinctBy {
-                    it.data
-                }
+                episodes
+                    .distinctBy {
+                        it.data
+                    }
             ) {
 
                 posterUrl =
@@ -845,10 +1055,12 @@ class HdfilmcehennemiProvider : MainAPI() {
                     """file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""",
                     RegexOption.IGNORE_CASE
                 ),
+
                 Regex(
                     """"file"\s*:\s*"([^"]+\.m3u8[^"]*)"""",
                     RegexOption.IGNORE_CASE
                 ),
+
                 Regex(
                     """["'](https?://[^"']+\.m3u8[^"']*)["']""",
                     RegexOption.IGNORE_CASE
@@ -916,75 +1128,106 @@ class HdfilmcehennemiProvider : MainAPI() {
                 referer = "$mainUrl/"
             ).document
 
-        val sourceElements =
-            document
-                .select(
-                    """
-                    nav.nav.card-nav.nav-slider a[href],
-                    .card-video iframe,
-                    iframe[src],
-                    iframe[data-src]
-                    """.trimIndent()
-                )
+        /*
+         * Önce oynatıcı sekmelerini ve iframe'leri topluyoruz.
+         */
 
-        var foundSomething =
-            false
+        val candidates =
+            mutableListOf<Pair<String, String>>()
 
-        for (
-            element in sourceElements
-        ) {
+        document
+            .select(
+                """
+                nav.nav.card-nav.nav-slider a[href],
+                a[data-player],
+                a[data-src],
+                iframe[src],
+                iframe[data-src],
+                .card-video iframe
+                """.trimIndent()
+            )
+            .forEach {
+                element ->
 
-            val candidate =
-                when {
-
-                    element.tagName()
-                        .equals(
-                            "iframe",
-                            ignoreCase = true
-                        ) -> {
+                val raw =
+                    when {
 
                         element
-                            .attr(
+                            .tagName()
+                            .equals(
+                                "iframe",
+                                ignoreCase = true
+                            ) ->
+
+                            element
+                                .attr(
+                                    "data-src"
+                                )
+                                .ifBlank {
+                                    element.attr(
+                                        "src"
+                                    )
+                                }
+
+                        element.hasAttr(
+                            "data-player"
+                        ) ->
+                            element.attr(
+                                "data-player"
+                            )
+
+                        element.hasAttr(
+                            "data-src"
+                        ) ->
+                            element.attr(
                                 "data-src"
                             )
-                            .ifBlank {
-                                element.attr(
-                                    "src"
-                                )
-                            }
+
+                        else ->
+                            element.attr(
+                                "href"
+                            )
                     }
+                        .trim()
 
-                    else ->
-                        element.attr(
-                            "href"
-                        )
+                if (
+                    raw.isBlank()
+                ) {
+                    return@forEach
                 }
-                    .trim()
 
-            if (
-                candidate.isBlank()
-            ) {
-                continue
+                val fixed =
+                    fixUrlNull(
+                        raw
+                    )
+                        ?: return@forEach
+
+                val sourceName =
+                    element
+                        .text()
+                        .trim()
+                        .ifBlank {
+                            name
+                        }
+
+                candidates.add(
+                    sourceName to fixed
+                )
             }
 
-            val sourceUrl =
-                fixUrlNull(
-                    candidate
-                )
-                    ?: continue
-
-            val sourceName =
-                element.text()
-                    .trim()
-                    .ifBlank {
-                        name
-                    }
+        for (
+            (
+                sourceName,
+                sourceUrl
+            ) in candidates.distinctBy {
+                it.second
+            }
+        ) {
 
             safeApiCall {
 
                 /*
-                 * Önce CloudStream'in standart extractor sistemine veriyoruz.
-                 * Bu, desteklenen iframe hostlarında en temiz yöntem.
+                 * Önce CloudStream'in kendi extractor sistemi.
                  */
 
                 loadExtractor(
@@ -995,7 +1238,7 @@ class HdfilmcehennemiProvider : MainAPI() {
                 )
 
                 /*
-                 * Kaynak sayfası ise içindeki iframe'i de kontrol ediyoruz.
+                 * Kaynak sayfasının içindeki iframe'e de bak.
                  */
 
                 val sourcePage =
@@ -1042,85 +1285,18 @@ class HdfilmcehennemiProvider : MainAPI() {
                         callback
                     )
 
-                    if (
-                        invokeLocalSource(
-                            sourceName,
-                            iframeUrl,
-                            callback
-                        )
-                    ) {
-                        foundSomething =
-                            true
-                    }
-                }
-
-                if (
                     invokeLocalSource(
                         sourceName,
-                        sourceUrl,
-                        callback
-                    )
-                ) {
-                    foundSomething =
-                        true
-                }
-            }
-        }
-
-        /*
-         * Bazı film sayfalarında iframe doğrudan sayfanın kendisinde olabilir.
-         */
-
-        val directIframes =
-            document
-                .select(
-                    "iframe[data-src], iframe[src]"
-                )
-
-        for (
-            iframe in directIframes
-        ) {
-
-            val iframeUrl =
-                iframe
-                    .attr(
-                        "data-src"
-                    )
-                    .ifBlank {
-                        iframe.attr(
-                            "src"
-                        )
-                    }
-                    .trim()
-                    .takeIf {
-                        it.isNotBlank()
-                    }
-                    ?.let {
-                        fixUrlNull(
-                            it
-                        )
-                    }
-                    ?: continue
-
-            safeApiCall {
-
-                loadExtractor(
-                    iframeUrl,
-                    data,
-                    subtitleCallback,
-                    callback
-                )
-
-                if (
-                    invokeLocalSource(
-                        name,
                         iframeUrl,
                         callback
                     )
-                ) {
-                    foundSomething =
-                        true
                 }
+
+                invokeLocalSource(
+                    sourceName,
+                    sourceUrl,
+                    callback
+                )
             }
         }
 
@@ -1128,6 +1304,7 @@ class HdfilmcehennemiProvider : MainAPI() {
     }
 
     data class Result(
+
         @JsonProperty("result")
         val result:
             ArrayList<Media>? =
@@ -1135,6 +1312,7 @@ class HdfilmcehennemiProvider : MainAPI() {
     )
 
     data class Media(
+
         @JsonProperty("title")
         val title:
             String? = null,
