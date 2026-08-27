@@ -1,6 +1,5 @@
 package com.anihepsi.dizibox
 
-import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 
