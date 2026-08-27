@@ -29,7 +29,7 @@ class DiziBoxProvider : MainAPI() {
     override var name = "DiziBox"
     override var lang = "tr"
 
-    override val hasMainPage = true
+    override val hasMainPage = false
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
 
@@ -45,270 +45,98 @@ class DiziBoxProvider : MainAPI() {
             "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     )
 
-    override val mainPage = mainPageOf(
-        "$mainUrl/tum-bolumler/?tip=populer" to "Popüler Bölümler",
-        "$mainUrl/tum-bolumler/" to "Son Bölümler",
-        "$mainUrl/efsane-diziler/" to "Efsane Diziler",
-        "$mainUrl/arsiv/?&imdb=7" to "IMDb 7+ Diziler"
-    )
+    override suspend fun quickSearch(
+        query: String
+    ): List<SearchResponse> {
+        return search(query)
+    }
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override suspend fun search(
+        query: String
+    ): List<SearchResponse> {
 
-        val pageUrl =
-            if (page <= 1) {
-                request.data
-            } else {
-                if (request.data.contains("?")) {
-                    "${request.data}&page=$page"
-                } else {
-                    "${request.data}?page=$page"
-                }
-            }
+        if (query.isBlank()) {
+            return emptyList()
+        }
+
+        val encoded = URLEncoder.encode(
+            query.trim(),
+            "UTF-8"
+        )
 
         val document = app.get(
-            pageUrl,
+            "$mainUrl/?s=$encoded",
             headers = headers,
             referer = "$mainUrl/"
         ).document
 
         /*
-         * Alfabetik açılır menü sitenin hemen her sayfasında bulunduğu için
-         * doğrudan tüm document içindeki /diziler/ linklerini toplamıyoruz.
+         * DiziBox gerçek arama yapısı:
          *
-         * Öncelikle sayfanın gerçek içerik alanlarındaki kartları arıyoruz.
+         * section#search
+         *   article.detailed-article
+         *     figure
+         *       a
+         *         img.main-cover
+         *
+         *     .detailed-article-container
+         *       h3
+         *         a
          */
-        val contentLinks = document.select(
-            """
-            #category-posts article a[href],
-            #best-series article a[href],
-            #recommended-series article a[href],
-            article.grid-box a[href],
-            article.article-series-small-grid a[href],
-            article.article-episode-card a[href]
-            """.trimIndent()
-        )
 
-        val results = contentLinks
-            .mapNotNull { element ->
-                element.toHomeResult()
+        return document
+            .select("#search article.detailed-article")
+            .mapNotNull { article ->
+                article.toSearchResult()
             }
-            .distinctBy { result ->
-                result.url
+            .distinctBy {
+                it.url
             }
-
-        return newHomePageResponse(
-            request.name,
-            results
-        )
     }
 
-    private fun Element.toHomeResult(): SearchResponse? {
+    private fun Element.toSearchResult(): SearchResponse? {
 
-        val rawHref = attr("href").trim()
-
-        if (rawHref.isBlank()) {
-            return null
-        }
-
-        val href = fixUrlNull(rawHref)
-            ?: return null
-
-        val container =
-            closest(
-                "article, .grid-box, .article-series-small-grid, .article-episode-card"
+        val link =
+            selectFirst(
+                ".detailed-article-container h3 a[href]"
             )
-                ?: parent()
-                ?: this
-
-        val image =
-            container.selectFirst("img")
-                ?: selectFirst("img")
-
-        val titleFromElement =
-            attr("title")
-                .removeSuffix(" izle")
-                .trim()
-
-        val titleFromContainer =
-            container.selectFirst(
-                ".post-title, .tv-title, .series-title, h2, h3, h4"
-            )
-                ?.text()
-                ?.removeSuffix(" izle")
-                ?.trim()
-                .orEmpty()
-
-        val titleFromImage =
-            image
-                ?.attr("alt")
-                ?.removeSuffix(" izle")
-                ?.trim()
-                .orEmpty()
-
-        val titleFromText =
-            text()
-                .removeSuffix(" izle")
-                .trim()
-
-        val title =
-            when {
-                titleFromElement.isNotBlank() ->
-                    titleFromElement
-
-                titleFromContainer.isNotBlank() ->
-                    titleFromContainer
-
-                titleFromImage.isNotBlank() ->
-                    titleFromImage
-
-                titleFromText.isNotBlank() ->
-                    titleFromText
-
-                else ->
-                    return null
-            }
-
-        val poster =
-            image?.let {
-                getImageUrl(it)
-            }
-                ?: extractBackgroundImage(container)
-
-        /*
-         * Bazı ana sayfa kartları doğrudan diziye,
-         * bazıları ise son yayınlanan bölüme gidebilir.
-         *
-         * Dizi linkiyse normal seri sonucu oluşturuyoruz.
-         * Bölüm linkiyse yine CloudStream içinde açılabilmesi için
-         * TvSeries sonucu olarak bırakıyoruz.
-         */
-        return newTvSeriesSearchResponse(
-            title,
-            href,
-            TvType.TvSeries
-        ) {
-            posterUrl = poster
-        }
-    }
-
-    private fun extractBackgroundImage(
-        element: Element
-    ): String? {
-
-        val style =
-            element
-                .selectFirst("[style*=background-image]")
-                ?.attr("style")
-                ?: element.attr("style")
-
-        if (style.isBlank()) {
-            return null
-        }
-
-        val imageUrl =
-            Regex(
-                """background-image\s*:\s*url\(['"]?([^'")]+)""",
-                RegexOption.IGNORE_CASE
-            )
-                .find(style)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.trim()
+                ?: selectFirst(
+                    "h3 a[href]"
+                )
+                ?: selectFirst(
+                    "figure a[href]"
+                )
                 ?: return null
 
-        return fixUrlNull(imageUrl)
-    }
-
-    private fun Element.toSeriesSearchResult(): SearchResponse? {
-
-        val hrefRaw = attr("href").trim()
-
-        if (hrefRaw.isBlank()) {
-            return null
-        }
-
-        val href = fixUrlNull(hrefRaw)
-            ?: return null
+        val href =
+            fixUrlNull(
+                link.attr("href")
+            )
+                ?: return null
 
         if (!href.contains("/diziler/")) {
             return null
         }
 
-        /*
-         * Alfabetik site menüsündeki linkleri arama sonucuna
-         * karıştırmamak için bu alanı dışarıda bırakıyoruz.
-         */
-        if (parents().any {
-                it.hasClass("alphabetical-category-wrapper") ||
-                it.hasClass("alphabetical-category-list")
-            }
-        ) {
+        val title =
+            link.text()
+                .trim()
+                .ifBlank {
+                    selectFirst("img.main-cover")
+                        ?.attr("alt")
+                        ?.trim()
+                        .orEmpty()
+                }
+
+        if (title.isBlank()) {
             return null
         }
 
-        val container =
-            closest(
-                "article, li, .grid-box, .article-series-small-grid, .archive-box"
-            )
-                ?: parent()
-                ?: this
-
-        val image =
-            selectFirst("img")
-                ?: container.selectFirst("img")
-
-        val titleFromAttribute =
-            attr("title")
-                .removeSuffix(" izle")
-                .trim()
-
-        val titleFromImage =
-            image
-                ?.attr("alt")
-                ?.removeSuffix(" izle")
-                ?.trim()
-                .orEmpty()
-
-        val titleFromContainer =
-            container
-                .selectFirst(
-                    ".tv-title, .post-title, .series-details, h2, h3, h4"
-                )
-                ?.text()
-                ?.removeSuffix(" izle")
-                ?.trim()
-                .orEmpty()
-
-        val titleFromText =
-            text()
-                .removeSuffix(" izle")
-                .trim()
-
-        val title =
-            when {
-                titleFromAttribute.isNotBlank() ->
-                    titleFromAttribute
-
-                titleFromImage.isNotBlank() ->
-                    titleFromImage
-
-                titleFromContainer.isNotBlank() ->
-                    titleFromContainer
-
-                titleFromText.isNotBlank() ->
-                    titleFromText
-
-                else ->
-                    return null
-            }
-
         val poster =
-            image?.let {
-                getImageUrl(it)
-            }
+            selectFirst("img.main-cover")
+                ?.let {
+                    getImageUrl(it)
+                }
 
         return newTvSeriesSearchResponse(
             title,
@@ -347,79 +175,6 @@ class DiziBoxProvider : MainAPI() {
         return null
     }
 
-    override suspend fun quickSearch(
-        query: String
-    ): List<SearchResponse> {
-
-        return search(query)
-    }
-
-    override suspend fun search(
-        query: String
-    ): List<SearchResponse> {
-
-        if (query.isBlank()) {
-            return emptyList()
-        }
-
-        val encoded =
-            URLEncoder.encode(
-                query.trim(),
-                "UTF-8"
-            )
-
-        val document = app.get(
-            "$mainUrl/?s=$encoded",
-            headers = headers,
-            referer = "$mainUrl/"
-        ).document
-
-        /*
-         * Önce gerçek arama/içerik container'larını deniyoruz.
-         * Alfabetik menüyü özellikle seçmiyoruz.
-         */
-        val directResults =
-            document.select(
-                """
-                #content article a[href*="/diziler/"],
-                #category-posts article a[href*="/diziler/"],
-                main article a[href*="/diziler/"],
-                .search-results article a[href*="/diziler/"],
-                .archive-box a[href*="/diziler/"]
-                """.trimIndent()
-            )
-                .mapNotNull { element ->
-                    element.toSeriesSearchResult()
-                }
-                .distinctBy {
-                    it.url
-                }
-
-        if (directResults.isNotEmpty()) {
-            return directResults
-        }
-
-        /*
-         * Site arama sonucunda farklı bir container kullanıyorsa
-         * ikinci aşamada tüm /diziler/ linklerini kontrol ediyoruz,
-         * ancak alfabetik kategori menüsünü yine dışarıda bırakıyoruz.
-         */
-        return document
-            .select("a[href*=\"/diziler/\"]")
-            .mapNotNull { element ->
-                element.toSeriesSearchResult()
-            }
-            .filter { result ->
-                result.name.contains(
-                    query.trim(),
-                    ignoreCase = true
-                )
-            }
-            .distinctBy {
-                it.url
-            }
-    }
-
     override suspend fun load(
         url: String
     ): LoadResponse? {
@@ -444,20 +199,13 @@ class DiziBoxProvider : MainAPI() {
             mutableListOf<Episode>()
 
         /*
-         * GERÇEK DIZIBOX SEZON YAPISI
+         * Gerçek sezon yapısı:
          *
-         * Ana dizi sayfasında:
+         * #seasons-list a
          *
-         * #seasons-list
-         *   a -> 1. Sezon
-         *   a -> 2. Sezon
-         *   a -> 3. Sezon ...
-         *
-         * Her sezon sayfasında:
-         *
-         * #category-posts
-         *   article
-         *     a.season-episode
+         * Örnek:
+         * /dizi/person-of-interest/1-sezon-person-of-interest/
+         * /dizi/person-of-interest/2-sezon-person-of-interest/
          */
 
         val seasonLinks =
@@ -490,10 +238,8 @@ class DiziBoxProvider : MainAPI() {
         if (seasonLinks.isNotEmpty()) {
 
             /*
-             * Bazı ana dizi sayfaları ilk sezonun bölümlerini
-             * zaten kendi HTML'sinde gösteriyor.
-             *
-             * Önce mevcut document içindeki category-posts'u okuyalım.
+             * Ana dizi sayfasında bazen ilk sezonun bölümleri
+             * doğrudan bulunuyor.
              */
             collectEpisodesFromSeasonDocument(
                 document = document,
@@ -502,8 +248,7 @@ class DiziBoxProvider : MainAPI() {
             )
 
             /*
-             * Sonra her sezonun kendi sayfasını açıp
-             * o sezona ait bölümleri topluyoruz.
+             * Tüm sezon sayfalarını sırayla oku.
              */
             for ((seasonNumber, seasonUrl) in seasonLinks) {
 
@@ -529,9 +274,7 @@ class DiziBoxProvider : MainAPI() {
         } else {
 
             /*
-             * Eğer açılan URL zaten doğrudan bir sezon sayfasıysa,
-             * seasons-list yine bulunabilir ama bulunmadığı eski
-             * sayfalara karşı yedek olarak mevcut document'i okuyoruz.
+             * Eğer direkt sezon sayfası açılmışsa fallback.
              */
             val seasonNumber =
                 extractSeasonNumber(
@@ -591,21 +334,16 @@ class DiziBoxProvider : MainAPI() {
                 .trim()
         }
 
-        val normalTitle =
-            document
-                .selectFirst(
-                    "h1, .tv-title, .post-title, .cat-title"
-                )
-                ?.text()
-                ?.trim()
-
-        if (!normalTitle.isNullOrBlank()) {
-            return normalTitle
-                .removeSuffix(" izle")
-                .trim()
-        }
-
-        return null
+        return document
+            .selectFirst(
+                "h1, .tv-title, .post-title, .cat-title"
+            )
+            ?.text()
+            ?.removeSuffix(" izle")
+            ?.trim()
+            ?.takeIf {
+                it.isNotBlank()
+            }
     }
 
     private fun getSeriesPoster(
@@ -665,13 +403,10 @@ class DiziBoxProvider : MainAPI() {
                     ignoreCase = true
                 )
         ) {
-
             description
                 .attr("content")
                 .trim()
-
         } else {
-
             description
                 .text()
                 .trim()
@@ -686,6 +421,7 @@ class DiziBoxProvider : MainAPI() {
         val fromText =
             text
                 ?.let {
+
                     Regex(
                         """(\d+)\s*\.\s*Sezon""",
                         RegexOption.IGNORE_CASE
@@ -717,10 +453,7 @@ class DiziBoxProvider : MainAPI() {
     ) {
 
         /*
-         * Sitenin gerçek bölüm linki:
-         *
-         * #category-posts
-         * a.season-episode[href]
+         * Gerçek DiziBox bölüm selector'ı.
          */
         val episodeElements =
             document.select(
@@ -736,13 +469,11 @@ class DiziBoxProvider : MainAPI() {
                     ?: continue
 
             /*
-             * Normal:
-             * person-of-interest-1-sezon-6-bolum-izle
+             * Destekler:
              *
-             * Sezon finali gibi:
-             * person-of-interest-1-sezon-23-bolum-sezon-finali-izle
-             *
-             * Bu nedenle regex'i "-bolum-izle" ile bitirmiyoruz.
+             * -1-sezon-1-bolum-izle
+             * -1-sezon-23-bolum-sezon-finali-izle
+             * -5-sezon-13-bolum-final-izle
              */
             val numbers =
                 Regex(
@@ -781,11 +512,8 @@ class DiziBoxProvider : MainAPI() {
                     seasonNumber != null &&
                     episodeNumber != null
                 ) {
-
                     "$seasonNumber. Sezon $episodeNumber. Bölüm"
-
                 } else {
-
                     element
                         .text()
                         .trim()
@@ -873,11 +601,8 @@ class DiziBoxProvider : MainAPI() {
                 ?.getOrNull(1)
 
         return if (id != null) {
-
             "https://ok.ru/videoembed/$id"
-
         } else {
-
             url
         }
     }
@@ -893,16 +618,6 @@ class DiziBoxProvider : MainAPI() {
 
         /*
          * ODNOK / OK.RU
-         *
-         * Açık player seçeneği:
-         *
-         * bölüm URL
-         * -> /3/
-         * -> player/haydi.php?v=BASE64
-         * -> normal Base64 URL decode
-         * -> ok.ru/video/ID
-         * -> ok.ru/videoembed/ID
-         * -> CloudStream standard extractor
          */
 
         val episodeBase =
@@ -966,11 +681,7 @@ class DiziBoxProvider : MainAPI() {
         }
 
         /*
-         * DBX PRO
-         *
-         * Burada sadece sayfanın açık iframe URL'sini
-         * CloudStream'in standart extractor sistemine veriyoruz.
-         * Herhangi bir token çözme/decryption/bypass yapılmıyor.
+         * DBX Pro fallback
          */
 
         try {
