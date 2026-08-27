@@ -422,9 +422,11 @@ class HdfilmcehennemiProvider : MainAPI() {
     /*
      * SEARCH
      *
-     * Sitenin AJAX/WordPress aramasına bağlı kalmıyoruz.
-     * Zaten çalıştığını bildiğimiz katalog sayfalarını okuyup
-     * aynı kart parser'ı ile sonuçları çıkarıyoruz.
+     * HDFilmCehennemi'nin kendi arama endpoint'i güvenilir çalışmadığı için,
+     * doğrudan çalıştığını bildiğimiz katalog sayfalarını tarıyoruz.
+     *
+     * İlk sürüm yalnızca ilk sayfayı tarıyordu.
+     * Şimdi film ve dizi kataloglarında 15 sayfaya kadar ilerliyoruz.
      */
 
     override suspend fun quickSearch(
@@ -438,52 +440,93 @@ class HdfilmcehennemiProvider : MainAPI() {
     ): List<SearchResponse> {
 
         val normalizedQuery =
-            query
-                .trim()
-                .lowercase()
+            normalizeSearchText(query)
 
         if (normalizedQuery.isBlank()) {
             return emptyList()
         }
 
-        val searchPages =
-            listOf(
-                "$mainUrl/" to TvType.Movie,
-                "$mainUrl/category/tavsiye-filmler-izle3/" to TvType.Movie,
-                "$mainUrl/yabancidiziizle-5/" to TvType.TvSeries,
-                "$mainUrl/category/populer-diziler-2/" to TvType.TvSeries,
-                "$mainUrl/imdb-7-puan-uzeri-filmler-2/" to TvType.Movie,
-                "$mainUrl/en-cok-yorumlananlar-2/" to TvType.Movie,
-                "$mainUrl/en-cok-begenilen-filmleri-izle-4/" to TvType.Movie
-            )
-
         val results =
             mutableListOf<SearchResponse>()
 
-        for ((pageUrl, defaultType) in searchPages) {
+        val searchSources =
+            listOf(
+                SearchSource(
+                    baseUrl = "$mainUrl/",
+                    type = TvType.Movie
+                ),
+                SearchSource(
+                    baseUrl = "$mainUrl/category/tavsiye-filmler-izle3/",
+                    type = TvType.Movie
+                ),
+                SearchSource(
+                    baseUrl = "$mainUrl/yabancidiziizle-5/",
+                    type = TvType.TvSeries
+                ),
+                SearchSource(
+                    baseUrl = "$mainUrl/category/populer-diziler-2/",
+                    type = TvType.TvSeries
+                )
+            )
 
-            safeApiCall {
+        for (source in searchSources) {
 
-                val document =
-                    app.get(
-                        pageUrl,
-                        headers = browserHeaders,
-                        referer = "$mainUrl/"
-                    ).document
+            for (page in 1..15) {
 
-                document
-                    .select("a[href]")
-                    .mapNotNull {
-                        it.toCatalogResult(defaultType)
+                val pageUrl =
+                    if (page == 1) {
+                        source.baseUrl
+                    } else {
+                        source.baseUrl
+                            .trimEnd('/') + "/page/$page/"
                     }
-                    .filter {
-                        it.name
-                            .lowercase()
-                            .contains(normalizedQuery)
+
+                try {
+
+                    val document =
+                        app.get(
+                            pageUrl,
+                            headers = browserHeaders,
+                            referer = "$mainUrl/"
+                        ).document
+
+                    val pageResults =
+                        document
+                            .select("a[href]")
+                            .mapNotNull {
+                                it.toCatalogResult(
+                                    source.type
+                                )
+                            }
+                            .distinctBy {
+                                it.url
+                            }
+
+                    if (pageResults.isEmpty()) {
+                        break
                     }
-                    .forEach {
-                        results.add(it)
+
+                    val matches =
+                        pageResults
+                            .filter {
+                                searchMatches(
+                                    it,
+                                    normalizedQuery
+                                )
+                            }
+
+                    if (matches.isNotEmpty()) {
+
+                        results.addAll(
+                            matches
+                        )
+
+                        break
                     }
+
+                } catch (_: Exception) {
+                    break
+                }
             }
         }
 
@@ -492,6 +535,61 @@ class HdfilmcehennemiProvider : MainAPI() {
                 it.url
             }
     }
+
+    private fun searchMatches(
+        result: SearchResponse,
+        normalizedQuery: String
+    ): Boolean {
+
+        val normalizedName =
+            normalizeSearchText(
+                result.name
+            )
+
+        val slug =
+            result.url
+                .substringBefore("?")
+                .trimEnd('/')
+                .substringAfterLast('/')
+                .replace("-", " ")
+                .replace("_", " ")
+
+        val normalizedSlug =
+            normalizeSearchText(
+                slug
+            )
+
+        return normalizedName.contains(
+            normalizedQuery
+        ) ||
+            normalizedSlug.contains(
+                normalizedQuery
+            )
+    }
+
+    private fun normalizeSearchText(
+        value: String
+    ): String {
+
+        return value
+            .lowercase()
+            .replace('ı', 'i')
+            .replace('ş', 's')
+            .replace('ğ', 'g')
+            .replace('ü', 'u')
+            .replace('ö', 'o')
+            .replace('ç', 'c')
+            .replace(
+                Regex("""[^a-z0-9]+"""),
+                " "
+            )
+            .trim()
+    }
+
+    private data class SearchSource(
+        val baseUrl: String,
+        val type: TvType
+    )
 
     override suspend fun load(
         url: String
@@ -810,7 +908,8 @@ class HdfilmcehennemiProvider : MainAPI() {
                 )
             )
 
-        var m3uLink: String? = null
+        var m3uLink:
+            String? = null
 
         for (pattern in patterns) {
 
