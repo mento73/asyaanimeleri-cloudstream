@@ -32,11 +32,11 @@ class HdfilmcehennemiProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/category/tavsiye-filmler-izle1/page/" to "Tavsiye Filmler",
-        "$mainUrl/yabancidiziizle-5/page/" to "Son Eklenen Yabancı Diziler",
-        "$mainUrl/imdb-7-puan-uzeri-filmler/page/" to "IMDb 7+ Filmler",
-        "$mainUrl/en-cok-yorumlananlar/page/" to "En Çok Yorumlananlar",
-        "$mainUrl/en-cok-begenilen-filmleri-izle/page/" to "En Çok Beğenilenler"
+        "$mainUrl/category/tavsiye-filmler-izle3/" to "Tavsiye Filmler",
+        "$mainUrl/category/populer-diziler-2/" to "Popüler Diziler",
+        "$mainUrl/imdb-7-puan-uzeri-filmler/" to "IMDb 7+ Filmler",
+        "$mainUrl/en-cok-yorumlananlar-2/" to "En Çok Yorumlananlar",
+        "$mainUrl/en-cok-begenilen-filmleri-izle/" to "En Çok Beğenilenler"
     )
 
     override suspend fun getMainPage(
@@ -44,8 +44,14 @@ class HdfilmcehennemiProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
 
+        val pageUrl = if (page == 1) {
+            request.data
+        } else {
+            request.data.trimEnd('/') + "/page/$page/"
+        }
+
         val document = app.get(
-            request.data + page
+            pageUrl
         ).document
 
         val type = if (
@@ -61,7 +67,7 @@ class HdfilmcehennemiProvider : MainAPI() {
 
         val home = document
             .select(
-                "div.card-body div.row div.col-6.col-sm-3.poster-container"
+                "div.poster-container, div.col-6.col-sm-3.poster-container"
             )
             .mapNotNull {
                 it.toSearchResult(type)
@@ -77,23 +83,48 @@ class HdfilmcehennemiProvider : MainAPI() {
         type: TvType
     ): SearchResponse? {
 
-        val title = selectFirst("a")
-            ?.text()
-            ?.trim()
+        val anchor = selectFirst("a")
             ?: return null
 
+        val title = anchor
+            .attr("title")
+            .ifBlank {
+                anchor.text()
+            }
+            .trim()
+            .ifBlank {
+                selectFirst(
+                    "h2, h3, .title"
+                )
+                    ?.text()
+                    ?.trim()
+                    .orEmpty()
+            }
+
+        if (title.isBlank()) {
+            return null
+        }
+
         val href = fixUrlNull(
-            selectFirst("a")
-                ?.attr("href")
+            anchor.attr("href")
         ) ?: return null
 
+        val image = selectFirst(
+            "img"
+        )
+
         val posterUrl = fixUrlNull(
-            selectFirst("img")
+            image
                 ?.attr("data-src")
                 ?.ifBlank {
-                    selectFirst("img")
-                        ?.attr("src")
-                        .orEmpty()
+                    image.attr(
+                        "data-lazy-src"
+                    )
+                }
+                ?.ifBlank {
+                    image.attr(
+                        "src"
+                    )
                 }
         )
 
@@ -105,7 +136,8 @@ class HdfilmcehennemiProvider : MainAPI() {
                     href,
                     TvType.TvSeries
                 ) {
-                    this.posterUrl = posterUrl
+                    this.posterUrl =
+                        posterUrl
                 }
 
             else ->
@@ -114,32 +146,49 @@ class HdfilmcehennemiProvider : MainAPI() {
                     href,
                     TvType.Movie
                 ) {
-                    this.posterUrl = posterUrl
+                    this.posterUrl =
+                        posterUrl
                 }
         }
     }
 
-    private fun Media.toSearchResponse(): SearchResponse? {
+    private fun Media.toSearchResponse():
+        SearchResponse? {
 
-        val title = title ?: return null
-        val slug = slug ?: return null
-        val slugPrefix = slugPrefix.orEmpty()
+        val title = title
+            ?: return null
+
+        val slug = slug
+            ?: return null
+
+        val slugPrefix =
+            slugPrefix.orEmpty()
+
+        val url =
+            "$mainUrl/$slugPrefix$slug"
+
+        val posterUrl =
+            poster?.let {
+                "$mainUrl/uploads/poster/$it"
+            }
 
         return newTvSeriesSearchResponse(
             title,
-            "$mainUrl/$slugPrefix$slug",
+            url,
             TvType.TvSeries
         ) {
-            posterUrl = poster?.let {
-                "$mainUrl/uploads/poster/$it"
-            }
+            this.posterUrl =
+                posterUrl
         }
     }
 
     override suspend fun quickSearch(
         query: String
     ): List<SearchResponse> {
-        return search(query)
+
+        return search(
+            query
+        )
     }
 
     override suspend fun search(
@@ -173,11 +222,14 @@ class HdfilmcehennemiProvider : MainAPI() {
         url: String
     ): LoadResponse? {
 
-        val document = app.get(url).document
+        val document =
+            app.get(
+                url
+            ).document
 
         val title = document
             .selectFirst(
-                "div.card-header > h1, div.card-header > h2"
+                "div.card-header > h1, div.card-header > h2, h1"
             )
             ?.text()
             ?.trim()
@@ -186,9 +238,19 @@ class HdfilmcehennemiProvider : MainAPI() {
         val poster = fixUrlNull(
             document
                 .selectFirst(
-                    "img.img-fluid"
+                    "img.img-fluid, .poster img"
                 )
-                ?.attr("src")
+                ?.let {
+                    image ->
+                    image.attr(
+                        "data-src"
+                    )
+                        .ifBlank {
+                            image.attr(
+                                "src"
+                            )
+                        }
+                }
         )
 
         val tags = document
@@ -211,7 +273,7 @@ class HdfilmcehennemiProvider : MainAPI() {
             if (
                 document
                     .select(
-                        "nav#seasonsTabs"
+                        "nav#seasonsTabs, #seasonsTabs"
                     )
                     .isEmpty()
             ) {
@@ -223,7 +285,7 @@ class HdfilmcehennemiProvider : MainAPI() {
         val description =
             document
                 .selectFirst(
-                    "article.text-white > p"
+                    "article.text-white > p, article p, .description"
                 )
                 ?.text()
                 ?.trim()
@@ -236,8 +298,12 @@ class HdfilmcehennemiProvider : MainAPI() {
                 .map {
                     Actor(
                         it.text(),
-                        it.select("img")
-                            .attr("src")
+                        it.selectFirst(
+                            "img"
+                        )
+                            ?.attr(
+                                "src"
+                            )
                     )
                 }
 
@@ -250,9 +316,10 @@ class HdfilmcehennemiProvider : MainAPI() {
 
                     val recName =
                         it.selectFirst(
-                            "h2.title"
+                            "h2.title, h3.title"
                         )
                             ?.text()
+                            ?.trim()
                             ?: return@mapNotNull null
 
                     val recHref =
@@ -260,7 +327,9 @@ class HdfilmcehennemiProvider : MainAPI() {
                             it.selectFirst(
                                 "a"
                             )
-                                ?.attr("href")
+                                ?.attr(
+                                    "href"
+                                )
                         )
                             ?: return@mapNotNull null
 
@@ -269,15 +338,23 @@ class HdfilmcehennemiProvider : MainAPI() {
                             it.selectFirst(
                                 "img"
                             )
-                                ?.attr(
-                                    "data-src"
-                                )
+                                ?.let {
+                                    image ->
+                                    image.attr(
+                                        "data-src"
+                                    )
+                                        .ifBlank {
+                                            image.attr(
+                                                "src"
+                                            )
+                                        }
+                                }
                         )
 
-                    newTvSeriesSearchResponse(
+                    newMovieSearchResponse(
                         recName,
                         recHref,
-                        TvType.TvSeries
+                        TvType.Movie
                     ) {
                         posterUrl =
                             recPosterUrl
@@ -312,49 +389,79 @@ class HdfilmcehennemiProvider : MainAPI() {
 
                         val href =
                             fixUrlNull(
-                                it.select(
+                                it.selectFirst(
                                     "a"
                                 )
-                                    .attr(
+                                    ?.attr(
                                         "href"
                                     )
                             )
                                 ?: return@mapNotNull null
 
                         val name =
-                            it.select(
+                            it.selectFirst(
                                 "h3"
                             )
-                                .text()
-                                .trim()
+                                ?.text()
+                                ?.trim()
+                                .orEmpty()
 
                         val episodeNumber =
                             Regex(
-                                """Bölüm\s*([0-9]+)""",
+                                """(?:Bölüm|Bolum)\s*([0-9]+)""",
                                 RegexOption.IGNORE_CASE
                             )
                                 .find(
                                     name
                                 )
                                 ?.groupValues
-                                ?.getOrNull(1)
+                                ?.getOrNull(
+                                    1
+                                )
                                 ?.toIntOrNull()
 
                         val season =
                             it.parents()
-                                .getOrNull(1)
-                                ?.attr("id")
-                                ?.substringAfter(
-                                    "-"
-                                )
-                                ?.toIntOrNull()
+                                .firstOrNull {
+                                    parent ->
+                                    parent.id()
+                                        .contains(
+                                            "season",
+                                            ignoreCase = true
+                                        ) ||
+                                        parent.id()
+                                            .contains(
+                                                "sezon",
+                                                ignoreCase = true
+                                            )
+                                }
+                                ?.id()
+                                ?.let {
+                                    id ->
+                                    Regex(
+                                        """([0-9]+)"""
+                                    )
+                                        .find(
+                                            id
+                                        )
+                                        ?.groupValues
+                                        ?.getOrNull(
+                                            1
+                                        )
+                                        ?.toIntOrNull()
+                                }
 
                         newEpisode(
                             href
                         ) {
-                            this.name = name
-                            this.season = season
-                            this.episode = episodeNumber
+                            this.name =
+                                name
+
+                            this.season =
+                                season
+
+                            this.episode =
+                                episodeNumber
                         }
                     }
 
@@ -364,13 +471,18 @@ class HdfilmcehennemiProvider : MainAPI() {
                 TvType.TvSeries,
                 episodes
             ) {
-                posterUrl = poster
 
-                this.year = year
+                posterUrl =
+                    poster
 
-                plot = description
+                this.year =
+                    year
 
-                this.tags = tags
+                plot =
+                    description
+
+                this.tags =
+                    tags
 
                 addActors(
                     actors
@@ -407,13 +519,18 @@ class HdfilmcehennemiProvider : MainAPI() {
                 TvType.Movie,
                 url
             ) {
-                posterUrl = poster
 
-                this.year = year
+                posterUrl =
+                    poster
 
-                plot = description
+                this.year =
+                    year
 
-                this.tags = tags
+                plot =
+                    description
+
+                this.tags =
+                    tags
 
                 addActors(
                     actors
@@ -432,41 +549,86 @@ class HdfilmcehennemiProvider : MainAPI() {
     private suspend fun invokeLocalSource(
         source: String,
         url: String,
-        sourceCallback: (ExtractorLink) -> Unit
+        sourceCallback:
+            (ExtractorLink) -> Unit
     ) {
 
-        if (url.isBlank()) {
+        if (
+            url.isBlank()
+        ) {
             return
         }
 
-        val m3uLink =
+        val response =
             app.get(
                 url,
                 referer = "$mainUrl/"
             )
+
+        val scripts =
+            response
                 .document
                 .select(
                     "script"
                 )
-                .find {
 
-                    val data =
-                        it.data()
+        val script =
+            scripts.find {
 
+                val data =
+                    it.data()
+
+                data.contains(
+                    "var sources = [];"
+                ) ||
                     data.contains(
-                        "var sources = [];"
+                        "playerInstance ="
                     ) ||
-                        data.contains(
-                            "playerInstance ="
-                        )
-                }
+                    data.contains(
+                        "file:"
+                    ) ||
+                    data.contains(
+                        "\"file\""
+                    )
+            }
                 ?.data()
-                ?.substringAfter(
-                    "[{file:\""
+                ?: return
+
+        val m3uLink =
+            Regex(
+                """file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""",
+                RegexOption.IGNORE_CASE
+            )
+                .find(
+                    script
                 )
-                ?.substringBefore(
-                    "\"}]"
+                ?.groupValues
+                ?.getOrNull(
+                    1
                 )
+                ?: Regex(
+                    """"file"\s*:\s*"([^"]+\.m3u8[^"]*)"""",
+                    RegexOption.IGNORE_CASE
+                )
+                    .find(
+                        script
+                    )
+                    ?.groupValues
+                    ?.getOrNull(
+                        1
+                    )
+                ?: script
+                    .substringAfter(
+                        "[{file:\"",
+                        ""
+                    )
+                    .substringBefore(
+                        "\"}]",
+                        ""
+                    )
+                    .takeIf {
+                        it.isNotBlank()
+                    }
                 ?: return
 
         M3u8Helper
@@ -480,7 +642,7 @@ class HdfilmcehennemiProvider : MainAPI() {
                 ) {
                     "$mainUrl/"
                 } else {
-                    "https://vidmoly.to/"
+                    url
                 }
             )
             .forEach(
@@ -491,18 +653,26 @@ class HdfilmcehennemiProvider : MainAPI() {
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        subtitleCallback:
+            (SubtitleFile) -> Unit,
+        callback:
+            (ExtractorLink) -> Unit
     ): Boolean {
 
+        val document =
+            app.get(
+                data
+            ).document
+
         val sourceButtons =
-            app.get(data)
-                .document
+            document
                 .select(
                     "nav.nav.card-nav.nav-slider a.nav-link"
                 )
 
-        for (button in sourceButtons) {
+        for (
+            button in sourceButtons
+        ) {
 
             val url =
                 fixUrlNull(
@@ -514,18 +684,22 @@ class HdfilmcehennemiProvider : MainAPI() {
 
             val source =
                 button.text()
+                    .ifBlank {
+                        name
+                    }
 
             safeApiCall {
 
                 val sourcePage =
                     app.get(
-                        url
+                        url,
+                        referer = data
                     ).document
 
                 val iframe =
                     sourcePage
                         .selectFirst(
-                            "div.card-video > iframe"
+                            "div.card-video iframe, iframe"
                         )
 
                 val iframeLink =
